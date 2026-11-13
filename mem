@@ -907,10 +907,12 @@ def verifier_perte(avant: Path, apres: Path) -> int:
 POINT_NOTE, POINT_ARCHIVE = "project/point-de-reprise.md", "archive/point-de-reprise.md"
 
 
-def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: str = POINT_ARCHIVE) -> int:
+def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: str = POINT_ARCHIVE,
+          auteur: str = "") -> int:
     """Remplace le point de reprise : l'ancien (tout ce qui suit l'en-tête, à partir du premier « ## ») part mot
     pour mot à la fin de l'archive, la note ne garde que l'en-tête et le point neuf. verifier-perte contrôle
-    qu'aucune ligne n'a disparu ; sinon rien n'est écrit. Commit si le dossier mémoire est un dépôt git."""
+    qu'aucune ligne n'a disparu ; sinon rien n'est changé. Commit si le dossier mémoire est un dépôt git.
+    `auteur` : nom de l'agent (plusieurs agents, une note chacun), repris dans le commit et l'en-tête de l'archive."""
     import contextlib
     import io
 
@@ -939,7 +941,8 @@ def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: st
         tete, corps = couper(avant_note)
         nouvelle_archive = avant_archive
         if corps.strip():
-            nouvelle_archive = (nouvelle_archive or "# Points de reprise archivés\n").rstrip("\n") + "\n\n" + corps
+            entete = f"# Points de reprise archivés{' de ' + auteur if auteur else ''}\n"
+            nouvelle_archive = (nouvelle_archive or entete).rstrip("\n") + "\n\n" + corps
         nouvelle_note = tete.rstrip("\n") + "\n\n" + texte
         with tempfile.TemporaryDirectory(prefix="mem-point-") as tmp:
             avant, apres = Path(tmp, "avant"), Path(tmp, "apres")
@@ -951,7 +954,7 @@ def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: st
             with contextlib.redirect_stdout(sortie):
                 perte = verifier_perte(avant, apres)
             if perte:
-                print("mem point : verifier-perte refuse, rien n'est écrit\n" + sortie.getvalue(), file=sys.stderr)
+                print("mem point : verifier-perte refuse, rien n'est changé\n" + sortie.getvalue(), file=sys.stderr)
                 return 1
         archive.parent.mkdir(parents=True, exist_ok=True)
         note.parent.mkdir(parents=True, exist_ok=True)
@@ -960,7 +963,8 @@ def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: st
         commit = ""
         if (racine / ".git").exists():
             subprocess.run(["git", "-C", str(racine), "add", str(note), str(archive)], check=False)
-            r = subprocess.run(["git", "-C", str(racine), "commit", "-q", "-m", "mem point : point de reprise neuf"],
+            r = subprocess.run(["git", "-C", str(racine), "commit", "-q", "-m",
+                                f"{auteur or 'mem point'} : point de reprise archivé, point neuf"],
                                capture_output=True, text=True)
             if r.returncode == 0:
                 commit = subprocess.run(["git", "-C", str(racine), "rev-parse", "--short", "HEAD"],
@@ -1159,6 +1163,7 @@ def main(argv=None) -> int:
     pt.add_argument("fichier", help="fichier du point neuf, ou « - » pour l'entrée standard")
     pt.add_argument("--note", default=POINT_NOTE, help=f"note du point, relative au dossier ({POINT_NOTE})")
     pt.add_argument("--archive", default=POINT_ARCHIVE, help=f"archive des anciens points ({POINT_ARCHIVE})")
+    pt.add_argument("--auteur", default="", help="nom de l'agent, repris dans le commit et l'archive")
     p = sub.add_parser("verifier-perte")
     p.add_argument("avant", type=Path)
     p.add_argument("apres", type=Path)
@@ -1198,7 +1203,7 @@ def main(argv=None) -> int:
     elif args.cmd == "etat":
         etat(racine, base)
     elif args.cmd == "point":
-        return point(racine, args.fichier, args.note, args.archive)
+        return point(racine, args.fichier, args.note, args.archive, args.auteur)
     elif args.cmd == "bench":
         return bench(racine, base, args.questions, args.n)
     return 0

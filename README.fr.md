@@ -80,7 +80,7 @@ Le cycle proposé, avec les fichiers du dossier `integration/` :
 
 `mem` reconnaît ces points (« POINT DE REPRISE ») : les plus anciens passent derrière les règles
 durables, sauf si la question demande le « dernier » état. Plusieurs agents sur un même projet :
-`mem point --note project/point-<agent>.md --archive archive/point-<agent>.md`.
+`mem point --note project/point-<agent>.md --archive archive/point-<agent>.md --auteur <agent>`.
 
 Pour aller plus loin (non fourni) : un hook `Stop` peut surveiller la taille du contexte et demander
 `/avant-clear` à l'agent au-delà d'un seuil, avant qu'une session devienne chère.

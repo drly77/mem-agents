@@ -81,7 +81,7 @@ The suggested cycle, with the files in `integration/` (written in French; transl
 
 `mem` recognises these notes ("POINT DE REPRISE"): older ones rank below lasting rules, unless the
 question asks for the "latest" state. Several agents on one project:
-`mem point --note project/point-<agent>.md --archive archive/point-<agent>.md`.
+`mem point --note project/point-<agent>.md --archive archive/point-<agent>.md --auteur <agent>`.
 
 Going further (not included): a `Stop` hook can watch the context size and ask the agent to run
 `/avant-clear` past a threshold, before a session gets expensive.
