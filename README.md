@@ -30,6 +30,36 @@ mem point point.md                           # new handover note before /clear o
 mem selftest
 ```
 
+## Why this tool
+
+`mem` came out of a cost problem, not only a search problem. In Claude Code, **every turn rereads the
+whole context**: the files loaded at startup (CLAUDE.md, MEMORY.md) and the entire conversation.
+The bigger the context, the more each turn costs, in money or in quota.
+
+On our project (several agents, weeks of work), three things had grown:
+
+- **CLAUDE.md**: 23 KB of rules, reread at every start and after every compaction;
+- **MEMORY.md**: 111 lines, 24 KB, loaded into every session as well;
+- **conversations**: the 1-million-token window allowed a session to reach 500,000 tokens before
+  being compacted, and every turn then reread half a million tokens.
+
+What we did:
+
+1. **A 250,000-token context ceiling** instead of half the 1-million window (500,000): past it, the
+   agent writes its handover note and the session is cleared (/clear) or compacted. Each turn then
+   costs at most half what it did. We enforce this ceiling with a `Stop` hook that is not included
+   here (see the end of the next section).
+2. **Startup files cut down to the essentials**: CLAUDE.md from 23 KB to 4 KB (the full old version
+   archived), MEMORY.md from 111 to 43 lines (24 KB to 8 KB), older entries moved verbatim into
+   `archive/`, nothing lost (checked with `mem verifier-perte`). About 70% less to reread at every start.
+3. **`mem` to fetch the rest on demand**: what is no longer loaded up front stays in the notes, and
+   the agent searches for it when needed instead of keeping everything in context. A search costs a
+   few seconds and a few hundred tokens of results; keeping those notes in context cost their full
+   size on every turn.
+
+The handover note (`mem point`) is what makes /clear safe: the agent restarts from an empty context,
+but with a state it wrote itself, and `mem` for everything else.
+
 ## Install
 
 1. **The script** (Python 3.11 or later, tested with 3.11 and 3.12; numpy for search by meaning):

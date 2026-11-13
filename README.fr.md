@@ -28,6 +28,37 @@ mem point point.md                           # point de reprise neuf avant /clea
 mem selftest
 ```
 
+## Pourquoi cet outil
+
+`mem` est né d'un problème de coût, pas seulement de recherche. Dans Claude Code, **chaque échange
+relit tout le contexte** : les fichiers chargés au démarrage (CLAUDE.md, MEMORY.md) et toute la
+conversation. Plus le contexte est gros, plus chaque tour coûte cher, en argent ou en quota.
+
+Sur notre projet (plusieurs agents, des semaines de travail), trois choses avaient grossi :
+
+- **CLAUDE.md** : 23 Ko de règles, relus à chaque démarrage et après chaque compact ;
+- **MEMORY.md** : 111 lignes, 24 Ko, chargées de même dans chaque session ;
+- **les conversations** : la fenêtre de 1 million de tokens permettait de pousser une session
+  jusqu'à 500 000 tokens avant de la compacter, et chaque tour relisait alors un demi-million de tokens.
+
+Ce que nous avons fait :
+
+1. **Un plafond de contexte à 250 000 tokens** au lieu de la moitié de la fenêtre de 1 million
+   (500 000) : au-delà, l'agent écrit son point de reprise et la session est vidée (/clear) ou
+   compactée. Chaque tour coûte alors au plus moitié moins qu'avant. Ce plafond est tenu chez nous
+   par un hook `Stop` qui n'est pas fourni ici (voir la fin de la section suivante).
+2. **Des fichiers chargés au démarrage réduits à l'essentiel** : CLAUDE.md passé de 23 Ko à 4 Ko
+   (l'ancienne version complète archivée), MEMORY.md de 111 à 43 lignes (24 Ko à 8 Ko), les
+   anciennes entrées déplacées mot pour mot dans `archive/`, sans rien perdre (contrôlé par
+   `mem verifier-perte`). Au total, environ 70 % de moins à relire à chaque démarrage.
+3. **`mem` pour retrouver le reste à la demande** : ce qui n'est plus chargé d'office reste
+   dans les notes, et l'agent le cherche quand il en a besoin, au lieu de tout garder en contexte.
+   Une recherche coûte quelques secondes et quelques centaines de tokens de résultats ; garder
+   ces notes en contexte coûtait leur taille entière à chaque tour.
+
+Le point de reprise (`mem point`) est ce qui rend le /clear sûr : l'agent repart d'un contexte
+vide, mais avec un état écrit par lui-même, et `mem` pour le reste.
+
 ## Installation
 
 1. **Le script** (Python 3.11 ou plus, testé avec 3.11 et 3.12 ; numpy pour la recherche par le sens) :
