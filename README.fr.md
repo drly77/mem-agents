@@ -56,7 +56,9 @@ Ce que nous avons fait :
 2. **Des fichiers chargés au démarrage réduits à l'essentiel** : CLAUDE.md passé de 23 Ko à 4 Ko
    (l'ancienne version complète archivée), MEMORY.md de 111 à 43 lignes (24 Ko à 8 Ko), les
    anciennes entrées déplacées mot pour mot dans `archive/`, sans rien perdre (contrôlé par
-   `mem verifier-perte`). Au total, environ 70 % de moins à relire à chaque démarrage.
+   `mem verifier-perte`). Au total, environ 70 % de moins à relire à chaque démarrage, et autant
+   de place rendue à la conversation : sous le même plafond, l'agent garde plus de messages, de
+   code lu et de résultats en vue avant de devoir passer par /clear.
 3. **`mem` pour retrouver le reste à la demande** : ce qui n'est plus chargé d'office reste
    dans les notes, et l'agent le cherche quand il en a besoin, au lieu de tout garder en contexte.
    Une recherche coûte quelques secondes et quelques centaines de tokens de résultats ; garder

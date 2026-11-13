@@ -56,7 +56,9 @@ What we did:
    to keep in view, you need more. Adapt it to your needs by watching what your sessions cost.
 2. **Startup files cut down to the essentials**: CLAUDE.md from 23 KB to 4 KB (the full old version
    archived), MEMORY.md from 111 to 43 lines (24 KB to 8 KB), older entries moved verbatim into
-   `archive/`, nothing lost (checked with `mem verifier-perte`). About 70% less to reread at every start.
+   `archive/`, nothing lost (checked with `mem verifier-perte`). About 70% less to reread at every start,
+   and that much room given back to the conversation: under the same ceiling, the agent keeps more
+   messages, code and results in view before it has to go through /clear.
 3. **`mem` to fetch the rest on demand**: what is no longer loaded up front stays in the notes, and
    the agent searches for it when needed instead of keeping everything in context. A search costs a
    few seconds and a few hundred tokens of results; keeping those notes in context cost their full
