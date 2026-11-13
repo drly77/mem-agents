@@ -47,6 +47,11 @@ Ce que nous avons fait :
    (500 000) : au-delà, l'agent écrit son point de reprise et la session est vidée (/clear) ou
    compactée. Chaque tour coûte alors au plus moitié moins qu'avant. Ce plafond est tenu chez nous
    par un hook `Stop` qui n'est pas fourni ici (voir la fin de la section suivante).
+   250 000 est le meilleur compromis **pour notre usage** : assez de place pour une tâche longue
+   (lecture de code, tests, relectures) sans vider la session au milieu, assez peu pour que chaque
+   tour reste raisonnable. Ce n'est pas une valeur universelle : avec des tâches courtes, un seuil
+   plus bas économise davantage ; avec de très gros fichiers à garder sous les yeux, il en faut
+   plus. À adapter à votre besoin, en regardant ce que coûtent vos sessions.
 2. **Des fichiers chargés au démarrage réduits à l'essentiel** : CLAUDE.md passé de 23 Ko à 4 Ko
    (l'ancienne version complète archivée), MEMORY.md de 111 à 43 lignes (24 Ko à 8 Ko), les
    anciennes entrées déplacées mot pour mot dans `archive/`, sans rien perdre (contrôlé par

@@ -49,6 +49,10 @@ What we did:
    agent writes its handover note and the session is cleared (/clear) or compacted. Each turn then
    costs at most half what it did. We enforce this ceiling with a `Stop` hook that is not included
    here (see the end of the next section).
+   250,000 is the best trade-off **for our use**: enough room for a long task (reading code, running
+   tests, reviews) without clearing the session halfway, small enough to keep each turn reasonable.
+   It is not a universal value: with short tasks, a lower threshold saves more; with very large files
+   to keep in view, you need more. Adapt it to your needs by watching what your sessions cost.
 2. **Startup files cut down to the essentials**: CLAUDE.md from 23 KB to 4 KB (the full old version
    archived), MEMORY.md from 111 to 43 lines (24 KB to 8 KB), older entries moved verbatim into
    `archive/`, nothing lost (checked with `mem verifier-perte`). About 70% less to reread at every start.
