@@ -21,6 +21,7 @@ Aucun texte ne quitte la machine.
 ```
 mem chercher "qui a le droit de déployer ?"
 mem chercher --vite "migration base"        # sans reclassement : ~0,3 s
+mem chercher --dans project/ "relais"       # seulement ce sous-dossier (ou une note : project/x.md)
 mem voir project/deploiement.md:12
 mem ajouter --type feedback "titre" < texte
 mem etat                                     # notes, passages, lignes écartées comme secrets

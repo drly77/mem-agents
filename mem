@@ -7,7 +7,7 @@ l'empreinte des notes change (ajout, modification, suppression, restauration).
 Aucune ligne qui ressemble à un secret n'entre dans l'index : elle est
 comptée dans `mem etat`, sans son contenu.
 
-    mem chercher "relais B wireguard" [--n 5] [--type project] [--depuis 2026-11-01] [--archives] [--tous] [--vite]
+    mem chercher "relais B wireguard" [--n 5] [--type project] [--depuis 2026-11-01] [--archives] [--dans project/] [--tous] [--vite]
     mem voir fichier:ligne
     mem ajouter --type project "titre" < texte
     mem indexer | mem etat
@@ -606,11 +606,41 @@ def date_ou_aujourd_hui(date: str) -> dt.date:
         return dt.date.today()
 
 
+def normaliser_dans(racine: Path, dans: str) -> str | None:
+    """« project », « ./project/ », un chemin absolu dans la mémoire → « project/ » (dossier) ou « project/x.md »
+    (une note) ; None si rien de tel n'existe dans ce dossier mémoire."""
+    chemin = Path(dans).expanduser()
+    if chemin.is_absolute():
+        try:
+            chemin = chemin.resolve().relative_to(racine.resolve())
+        except ValueError:
+            return None
+    cible = racine / chemin
+    rel = chemin.as_posix().strip("/")
+    if rel in ("", "."):
+        return ""
+    if cible.is_dir():
+        return rel + "/"
+    return rel if cible.is_file() else None
+
+
+def filtre_dans(dans: str | None, colonne: str = "fichier") -> tuple[str, list]:
+    """Clause SQL : la note elle-même, ou toutes les notes sous le dossier (préfixe exact, sans joker LIKE)."""
+    if not dans:
+        return "", []
+    if dans.endswith("/"):
+        return f" AND substr({colonne}, 1, ?) = ?", [len(dans), dans]
+    return f" AND {colonne} = ?", [dans]
+
+
 def chercher(racine: Path, base: Path, mots: str, n=5, type_=None, depuis=None, archives=False, auteur=None,
-             reclasse=True):
+             reclasse=True, dans=None):
     """ET d'abord, puis OU pour compléter ; archives seulement si demandées ou s'il manque des résultats ;
-    BM25 (titre ×2) pondéré par la récence ; au plus PAR_FICHIER passages par fichier."""
+    BM25 (titre ×2) pondéré par la récence ; au plus PAR_FICHIER passages par fichier.
+    `dans` (déjà normalisé) : seulement cette note ou ce sous-dossier ; « archive/… » cherche alors dans les archives."""
     assurer_index(racine, base)
+    if dans and dans.startswith("archive"):
+        archives = True
     termes = termes_de(mots)
     recent = any(t in RECENT for t in re.findall(r"\w+", mots.lower()))
     con = sqlite3.connect(f"file:{base}?mode=ro", uri=True)
@@ -622,8 +652,11 @@ def chercher(racine: Path, base: Path, mots: str, n=5, type_=None, depuis=None, 
         args: list = [requete_fts(termes, operateur)]
         if not avec_archives:
             sql += " AND type != 'archive'"
-        if not type_:
+        if not type_ and not dans:
             sql += " AND type != 'index'"  # MEMORY.md est déjà dans le contexte de chaque session
+        clause, valeurs = filtre_dans(dans)
+        sql += clause
+        args += valeurs
         if type_:
             sql += " AND type = ?"
             args.append(type_)
@@ -668,7 +701,7 @@ def chercher(racine: Path, base: Path, mots: str, n=5, type_=None, depuis=None, 
                 mots_ordonnes.append(r)
 
     candidats = mots_ordonnes
-    sens_ordonnes = [] if recent else proches(con, base, mots, archives, type_, depuis, auteur, journaux)
+    sens_ordonnes = [] if recent else proches(con, base, mots, archives, type_, depuis, auteur, journaux, dans)
     if sens_ordonnes:  # fusion des rangs (RRF) : un passage bien placé par l'un ou l'autre remonte
         score, ligne_de = collections.Counter(), {}
         for poids_, liste in ((1.0, mots_ordonnes), (POIDS_SENS, sens_ordonnes)):
@@ -772,7 +805,7 @@ def reclasser(question: str, resultats: list) -> list:
     return [tete[i] for i in ordre] + reste
 
 
-def proches(con, base: Path, question: str, archives, type_, depuis, auteur, journaux) -> list:
+def proches(con, base: Path, question: str, archives, type_, depuis, auteur, journaux, dans=None) -> list:
     """Passages classés par le sens (cosinus avec la question) ; [] si pas de vecteurs ou pas d'Ollama."""
     if not sens_actif() or not base_sens(base).exists():
         return []
@@ -790,9 +823,14 @@ def proches(con, base: Path, question: str, archives, type_, depuis, auteur, jou
     args: list = []
     if not archives:
         sql += " AND p.type != 'archive'"
-    sql += " AND p.type = ?" if type_ else " AND p.type != 'index'"
     if type_:
+        sql += " AND p.type = ?"
         args.append(type_)
+    elif not dans:
+        sql += " AND p.type != 'index'"
+    clause, valeurs = filtre_dans(dans, "p.fichier")
+    sql += clause
+    args += valeurs
     if depuis:
         sql += " AND p.date >= ?"
         args.append(depuis)
@@ -1145,6 +1183,19 @@ def selftest() -> int:
             cas("index : secret d'un champ d'en-tête absent", FAUX not in tout)
             cas("index : secret court de la description absent", "cle api: abcd" not in tout)
             cas("chercher : plusieurs mots", any(r[0] == "project/pieges.md" for r in chercher(racine, base, "wireguard relais")))
+            for d in ("feedback", "projectx"):
+                (racine / d).mkdir()
+                (racine / d / "relais.md").write_text(f"---\nname: relais\nmetadata:\n  type: {d}\n---\n\nwireguard relais {d}\n",
+                                                      encoding="utf-8")
+            dans = normaliser_dans(racine, "./project")
+            trouves = {r[0] for r in chercher(racine, base, "wireguard relais", dans=dans)}
+            cas("chercher --dans ./project : ce dossier seulement (pas projectx/)",
+                dans == "project/" and trouves == {"project/pieges.md"})
+            cas("chercher --dans une note : elle seule",
+                {r[0] for r in chercher(racine, base, "wireguard", dans=normaliser_dans(racine, "feedback/relais.md"))}
+                == {"feedback/relais.md"})
+            cas("chercher --dans inexistant : None (refusé par la ligne de commande)",
+                normaliser_dans(racine, "nulle-part") is None and normaliser_dans(racine, "/etc") is None)
             try:
                 voir(racine, base, "project/pieges.md")
                 cas("voir sans :ligne refusé proprement", False)
@@ -1250,6 +1301,7 @@ def main(argv=None) -> int:
     c.add_argument("--type")
     c.add_argument("--depuis")
     c.add_argument("--archives", action="store_true", help="chercher aussi dans archive/ d'emblée")
+    c.add_argument("--dans", help="seulement ce sous-dossier (project/) ou cette note (project/x.md)")
     c.add_argument("--tous", action="store_true", help="notes de tous les auteurs, et les dossiers de ~/.config/mem/dossiers")
     c.add_argument("--vite", action="store_true", help="sans reclassement par le modèle local (0,3 s au lieu de ~8 s)")
     v = sub.add_parser("voir", parents=[commun])
@@ -1286,9 +1338,17 @@ def main(argv=None) -> int:
     if args.cmd == "chercher":
         args.mots = " ".join(args.mots)
         auteur = None if args.tous else (os.environ.get("AGENT_NOM") or None)
-        print(f"(mémoire : {racine})", file=sys.stderr)
+        dans = None
+        if args.dans is not None:
+            dans = normaliser_dans(racine, args.dans)
+            if dans is None:
+                sous = sorted(d.name + "/" for d in racine.iterdir() if d.is_dir() and not d.name.startswith("."))
+                print(f"mem : « {args.dans} » n'existe pas dans {racine} (dossiers : {', '.join(sous) or 'aucun'})",
+                      file=sys.stderr)
+                return 2
+        print(f"(mémoire : {racine}" + (f", dans {dans}" if dans else "") + ")", file=sys.stderr)
         afficher(chercher(racine, base, args.mots, args.n, args.type, args.depuis, args.archives, auteur,
-                          reclasse=not args.vite))
+                          reclasse=not args.vite, dans=dans))
         if args.tous:
             liste = Path.home() / ".config" / "mem" / "dossiers"
             try:
@@ -1303,7 +1363,7 @@ def main(argv=None) -> int:
                 if autre.is_dir() and autre.resolve() != racine.resolve():
                     print(f"── {autre}")
                     afficher(chercher(autre, base_par_defaut(autre), args.mots, args.n, args.type, args.depuis, args.archives,
-                                      reclasse=not args.vite))
+                                      reclasse=not args.vite, dans=dans))
     elif args.cmd == "voir":
         voir(racine, base, args.cible)
     elif args.cmd == "ajouter":

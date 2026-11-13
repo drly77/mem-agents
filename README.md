@@ -23,6 +23,7 @@ The tool itself speaks French (commands, help, messages); the commands are short
 ```
 mem chercher "who is allowed to deploy?"     # search
 mem chercher --vite "database migration"     # no reranking: ~0.3 s
+mem chercher --dans project/ "relay"         # only this subfolder (or one note: project/x.md)
 mem voir project/deploiement.md:12           # show a passage in context
 mem ajouter --type feedback "title" < text   # add a note
 mem etat                                     # notes, passages, lines withheld as secrets
