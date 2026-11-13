@@ -1,72 +1,101 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 440" width="760" height="440" role="img" aria-label="1-million-token window: what every turn rereads">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 700" width="820" height="700" role="img" aria-label="1. The 1-million-token window: what every turn rereads ; 2. The files loaded at startup (CLAUDE.md + MEMORY.md) −74% ; 3. Under the same 250k ceiling: room given back to the conversation +11k">
 <style>
   text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;font-size:13px;fill:#1f2328}
-  .p{font-size:11.5px;fill:#59636e} .b{font-weight:600} .w{fill:#ffffff;font-size:11.5px}
-  .cc{fill:#8c959f} .fi{fill:#d4a72c} .cv{fill:#0969da} .tr{stroke:#59636e;stroke-width:1} .hl{stroke:#d1d9e0}
-  .fond{fill:#ffffff;stroke:#d1d9e0} .bord{fill:none;stroke:#d1d9e0} .seuil{stroke:#cf222e;stroke-width:2;stroke-dasharray:4 3} .rs{fill:#cf222e}
+  .p{font-size:12px;fill:#59636e} .b{font-weight:600} .t{font-weight:600;font-size:14px}
+  .w{fill:#ffffff;font-size:12px} .d{fill:#1f2328;font-size:12px} .g{fill:#1a7f37;font-weight:700}
+  .gros{font-size:22px}
+  .fond{fill:#ffffff;stroke:#d1d9e0} .bord{fill:none;stroke:#d1d9e0} .hl{stroke:#d1d9e0}
+  .cc{fill:#8c959f} .fi{fill:#d4a72c} .fi2{fill:#eac54f} .cv{fill:#0969da} .gn{fill:#1a7f37}
+  .tr{stroke:#59636e;stroke-width:1} .seuil{stroke:#cf222e;stroke-width:2;stroke-dasharray:4 3} .rs{fill:#cf222e}
+  .sep{stroke:#d1d9e0;stroke-width:1}
   @media (prefers-color-scheme:dark){
-    text{fill:#e6edf3} .p{fill:#9198a1} .cc{fill:#656c76} .fi{fill:#bb8009} .cv{fill:#1f6feb}
-    .fond{fill:#0d1117;stroke:#3d444d} .tr{stroke:#9198a1} .hl{stroke:#3d444d} .bord{stroke:#3d444d} .seuil{stroke:#f85149} .rs{fill:#f85149}}
+    text{fill:#e6edf3} .p{fill:#9198a1} .d{fill:#1f2328} .g{fill:#3fb950}
+    .fond{fill:#0d1117;stroke:#3d444d} .bord{stroke:#3d444d} .hl{stroke:#3d444d} .sep{stroke:#3d444d}
+    .cc{fill:#656c76} .fi{fill:#bb8009} .fi2{fill:#d29922} .cv{fill:#1f6feb} .gn{fill:#238636}
+    .tr{stroke:#9198a1} .seuil{stroke:#f85149} .rs{fill:#f85149}}
 </style>
-<defs><pattern id="h" patternUnits="userSpaceOnUse" width="7" height="7" patternTransform="rotate(45)">
-<line x1="0" y1="0" x2="0" y2="7" class="hl" stroke-width="2"/></pattern></defs>
-<rect x="0.5" y="0.5" width="759" height="439" rx="8" class="fond"/>
-<text x="120" y="24" class="b">1-million-token window: what every turn rereads</text>
-<line x1="120.0" y1="30" x2="120.0" y2="36" class="tr"/>
-<text x="120.0" y="48" class="p" text-anchor="middle">0</text>
-<line x1="270.0" y1="30" x2="270.0" y2="36" class="tr"/>
-<text x="270.0" y="48" class="p" text-anchor="middle">250k</text>
-<line x1="420.0" y1="30" x2="420.0" y2="36" class="tr"/>
-<text x="420.0" y="48" class="p" text-anchor="middle">500k</text>
-<line x1="570.0" y1="30" x2="570.0" y2="36" class="tr"/>
-<text x="570.0" y="48" class="p" text-anchor="middle">750k</text>
-<line x1="720.0" y1="30" x2="720.0" y2="36" class="tr"/>
-<text x="720.0" y="48" class="p" text-anchor="middle">1 M</text>
-<text x="108" y="88" class="b" text-anchor="end">Before</text>
-<rect x="120.0" y="66" width="600" height="32" fill="url(#h)"/>
-<rect x="120.0" y="66" width="24.0" height="32" class="cc"/>
-<rect x="144.0" y="66" width="9.0" height="32" class="fi"/>
-<rect x="153.0" y="66" width="267.0" height="32" class="cv"/>
-<rect x="120.0" y="66" width="600" height="32" class="bord"/>
-<text x="161.0" y="87" class="w">conversation</text>
-<text x="570.0" y="87" class="p" text-anchor="middle">unused</text>
-<line x1="420.0" y1="60" x2="420.0" y2="106" class="seuil"/>
-<text x="426.0" y="118" class="rs">compaction around 500k</text>
-<text x="414.0" y="118" class="p" text-anchor="end">worst case ~500k reread every turn</text>
-<text x="108" y="172" class="b" text-anchor="end">After</text>
-<rect x="120.0" y="150" width="600" height="32" fill="url(#h)"/>
-<rect x="120.0" y="150" width="24.0" height="32" class="cc"/>
-<rect x="144.0" y="150" width="2.4" height="32" class="fi"/>
-<rect x="146.4" y="150" width="123.6" height="32" class="cv"/>
-<rect x="120.0" y="150" width="600" height="32" class="bord"/>
-<text x="154.4" y="171" class="w">conversation</text>
-<text x="495.0" y="171" class="p" text-anchor="middle">unused</text>
-<line x1="270.0" y1="144" x2="270.0" y2="190" class="seuil"/>
-<text x="276.0" y="202" class="rs">250k ceiling: /avant-clear, then /clear</text>
-<text x="264.0" y="202" class="p" text-anchor="end">worst case ~250k reread every turn</text>
-<text x="120" y="240" class="b">At the start of every session (zoom, 0 to 60k)</text>
-<line x1="120.0" y1="250" x2="120.0" y2="256" class="tr"/>
-<text x="120.0" y="268" class="p" text-anchor="middle">0</text>
-<line x1="320.0" y1="250" x2="320.0" y2="256" class="tr"/>
-<text x="320.0" y="268" class="p" text-anchor="middle">20k</text>
-<line x1="520.0" y1="250" x2="520.0" y2="256" class="tr"/>
-<text x="520.0" y="268" class="p" text-anchor="middle">40k</text>
-<line x1="720.0" y1="250" x2="720.0" y2="256" class="tr"/>
-<text x="720.0" y="268" class="p" text-anchor="middle">60k</text>
-<text x="108" y="295" class="b" text-anchor="end">Before</text>
-<rect x="120.0" y="278" width="400.0" height="24" class="cc"/>
-<rect x="520.0" y="278" width="150.0" height="24" class="fi"/>
-<text x="128.0" y="294" class="w">Claude Code ≈ 40k</text>
-<text x="678.0" y="295" class="b">≈ 55k</text>
-<text x="522.0" y="318" class="p">CLAUDE.md 23 KB, MEMORY.md 24 KB</text>
-<text x="108" y="353" class="b" text-anchor="end">After</text>
-<rect x="120.0" y="336" width="400.0" height="24" class="cc"/>
-<rect x="520.0" y="336" width="40.0" height="24" class="fi"/>
-<text x="128.0" y="352" class="w">Claude Code ≈ 40k</text>
-<text x="568.0" y="353" class="b">≈ 44k</text>
-<text x="522.0" y="376" class="p">CLAUDE.md 4 KB, MEMORY.md 8 KB</text>
-<rect x="120" y="410" width="12" height="12" class="cc"/><text x="138" y="421" class="p">Claude Code</text>
-<rect x="227.2" y="410" width="12" height="12" class="fi"/><text x="245.2" y="421" class="p">CLAUDE.md + MEMORY.md</text>
-<rect x="406.4" y="410" width="12" height="12" class="cv"/><text x="424.4" y="421" class="p">conversation</text>
-<rect x="520.8" y="410" width="12" height="12" fill="url(#h)"/><rect x="520.8" y="410" width="12" height="12" class="bord"/><text x="538.8" y="421" class="p">unused</text>
+<defs><pattern id="h" patternUnits="userSpaceOnUse" width="7" height="7" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="7" class="hl" stroke-width="2"/></pattern></defs>
+<rect x="0.5" y="0.5" width="819" height="699" rx="10" class="fond"/>
+<text x="28" y="40" class="t">1. The 1-million-token window: what every turn rereads</text>
+<line x1="170.0" y1="62" x2="170.0" y2="68" class="tr"/>
+<text x="170.0" y="82" class="p" text-anchor="middle">0</text>
+<line x1="317.5" y1="62" x2="317.5" y2="68" class="tr"/>
+<text x="317.5" y="82" class="p" text-anchor="middle">250k</text>
+<line x1="465.0" y1="62" x2="465.0" y2="68" class="tr"/>
+<text x="465.0" y="82" class="p" text-anchor="middle">500k</text>
+<line x1="612.5" y1="62" x2="612.5" y2="68" class="tr"/>
+<text x="612.5" y="82" class="p" text-anchor="middle">750k</text>
+<line x1="760.0" y1="62" x2="760.0" y2="68" class="tr"/>
+<text x="760.0" y="82" class="p" text-anchor="middle">1M</text>
+<text x="154" y="118" class="b" text-anchor="end">Before</text>
+<rect x="170.0" y="96" width="590.0" height="34" class=""/>
+<rect x="170.0" y="96" width="590" height="34" fill="url(#h)"/>
+<rect x="170.0" y="96" width="23.6" height="34" class="cc"/>
+<rect x="193.6" y="96" width="8.8" height="34" class="fi"/>
+<rect x="202.4" y="96" width="262.6" height="34" class="cv"/>
+<rect x="170.0" y="96" width="590" height="34" class="bord"/>
+<text x="212.4" y="118" class="w">conversation</text>
+<text x="612.5" y="118" class="p" text-anchor="middle">unused</text>
+<line x1="465.0" y1="88" x2="465.0" y2="138" class="seuil"/>
+<text x="473.0" y="152" class="rs">compaction around 500k</text>
+<text x="457.0" y="152" class="p" text-anchor="end">worst case ~500k reread every turn</text>
+<text x="154" y="198" class="b" text-anchor="end">After</text>
+<rect x="170.0" y="176" width="590.0" height="34" class=""/>
+<rect x="170.0" y="176" width="590" height="34" fill="url(#h)"/>
+<rect x="170.0" y="176" width="23.6" height="34" class="cc"/>
+<rect x="193.6" y="176" width="2.4" height="34" class="fi"/>
+<rect x="196.0" y="176" width="121.5" height="34" class="cv"/>
+<rect x="170.0" y="176" width="590" height="34" class="bord"/>
+<text x="206.0" y="198" class="w">conversation</text>
+<text x="538.8" y="198" class="p" text-anchor="middle">unused</text>
+<line x1="317.5" y1="168" x2="317.5" y2="218" class="seuil"/>
+<text x="325.5" y="232" class="rs">250k ceiling: /avant-clear, then /clear</text>
+<text x="309.5" y="232" class="p" text-anchor="end">worst case ~250k reread every turn</text>
+<line x1="28" y1="258" x2="792" y2="258" class="sep"/>
+<text x="28" y="292" class="t">2. The files loaded at startup (CLAUDE.md + MEMORY.md)</text>
+<text x="154" y="336" class="b" text-anchor="end">Before</text>
+<rect x="170.0" y="316" width="271.4" height="30" class="fi"/>
+<rect x="441.4" y="316" width="283.2" height="30" class="fi2"/>
+<text x="180.0" y="336" class="d">CLAUDE.md 23 KB</text>
+<text x="451.4" y="336" class="d">MEMORY.md 24 KB</text>
+<text x="734.6" y="336" class="b">47 KB</text>
+<text x="154" y="386" class="b" text-anchor="end">After</text>
+<rect x="170.0" y="366" width="47.2" height="30" class="fi"/>
+<rect x="217.2" y="366" width="94.4" height="30" class="fi2"/>
+<text x="321.6" y="386"><tspan class="b">12 KB</tspan><tspan class="p">  (CLAUDE.md 4 KB, MEMORY.md 8 KB)</tspan></text>
+<text x="756.0" y="392" class="g gros" text-anchor="end">−74%</text>
+<line x1="28" y1="428" x2="792" y2="428" class="sep"/>
+<text x="28" y="462" class="t">3. Under the same 250k ceiling: room given back to the conversation</text>
+<line x1="170.0" y1="482" x2="170.0" y2="488" class="tr"/>
+<text x="170.0" y="502" class="p" text-anchor="middle">0</text>
+<line x1="288.0" y1="482" x2="288.0" y2="488" class="tr"/>
+<text x="288.0" y="502" class="p" text-anchor="middle">50k</text>
+<line x1="406.0" y1="482" x2="406.0" y2="488" class="tr"/>
+<text x="406.0" y="502" class="p" text-anchor="middle">100k</text>
+<line x1="524.0" y1="482" x2="524.0" y2="488" class="tr"/>
+<text x="524.0" y="502" class="p" text-anchor="middle">150k</text>
+<line x1="642.0" y1="482" x2="642.0" y2="488" class="tr"/>
+<text x="642.0" y="502" class="p" text-anchor="middle">200k</text>
+<line x1="760.0" y1="482" x2="760.0" y2="488" class="tr"/>
+<text x="760.0" y="502" class="p" text-anchor="middle">250k</text>
+<text x="154" y="538" class="b" text-anchor="end">old files</text>
+<rect x="170.0" y="516" width="94.4" height="34" class="cc"/>
+<rect x="264.4" y="516" width="35.4" height="34" class="fi"/>
+<rect x="299.8" y="516" width="460.2" height="34" class="cv"/>
+<text x="309.8" y="538" class="w">conversation ≈ 195k</text>
+<line x1="760.0" y1="508" x2="760.0" y2="558" class="seuil"/>
+<text x="154" y="598" class="b" text-anchor="end">new files</text>
+<rect x="170.0" y="576" width="94.4" height="34" class="cc"/>
+<rect x="264.4" y="576" width="9.4" height="34" class="fi"/>
+<rect x="273.8" y="576" width="460.2" height="34" class="cv"/>
+<rect x="734.0" y="576" width="26.0" height="34" class="gn"/>
+<text x="756.0" y="568" class="g" text-anchor="end">+11k</text>
+<text x="283.8" y="598" class="w">conversation ≈ 206k</text>
+<line x1="760.0" y1="568" x2="760.0" y2="618" class="seuil"/>
+<text x="756.0" y="634" class="rs" text-anchor="end">250k ceiling</text>
+<rect x="28" y="666" width="12" height="12" class="cc"/><text x="46" y="677" class="p">Claude Code</text>
+<rect x="139.0" y="666" width="12" height="12" class="fi"/><text x="157.0" y="677" class="p">CLAUDE.md + MEMORY.md</text>
+<rect x="320.0" y="666" width="12" height="12" class="cv"/><text x="338.0" y="677" class="p">conversation</text>
+<rect x="438.0" y="666" width="12" height="12" class="gn"/><text x="456.0" y="677" class="p">room gained</text>
+<rect x="549.0" y="666" width="12" height="12" fill="url(#h)"/><rect x="549.0" y="666" width="12" height="12" class="bord"/><text x="567.0" y="677" class="p">unused</text>
 </svg>

@@ -67,15 +67,16 @@ Ce que nous avons fait :
 2. **Des fichiers chargés au démarrage réduits à l'essentiel** : CLAUDE.md passé de 23 Ko à 4 Ko
    (l'ancienne version complète archivée), MEMORY.md de 111 à 43 lignes (24 Ko à 8 Ko), les
    anciennes entrées déplacées mot pour mot dans `archive/`, sans rien perdre (contrôlé par
-   `mem verifier-perte`). Au total, environ 70 % de moins à relire à chaque démarrage, et autant
-   de place rendue à la conversation : sous le même plafond, l'agent garde plus de messages, de
-   code lu et de résultats en vue avant de devoir passer par /clear.
+   `mem verifier-perte`). Ces deux fichiers pèsent 74 % de moins (47 Ko → 12 Ko, de l'ordre de
+   15 000 → 4 000 tokens). Claude Code compris, le démarrage passe d'environ 55 000 à 44 000 tokens,
+   et ces ~11 000 tokens sont rendus à la conversation : sous le même plafond, l'agent garde plus de
+   messages, de code lu et de résultats en vue avant de devoir passer par /clear.
 3. **`mem` pour retrouver le reste à la demande** : ce qui n'est plus chargé d'office reste
    dans les notes, et l'agent le cherche quand il en a besoin, au lieu de tout garder en contexte.
    Une recherche coûte quelques secondes et quelques centaines de tokens de résultats ; garder
    ces notes en contexte coûtait leur taille entière à chaque tour.
 
-![La fenêtre de contexte avant et après : au démarrage ≈ 55 k puis ≈ 44 k tokens ; au pire 500 k puis 250 k relus à chaque tour](docs/contexte.fr.svg)
+![Avant et après : au pire 500 k puis 250 k tokens relus à chaque tour ; fichiers de démarrage 47 Ko → 12 Ko (−74 %) ; sous le plafond de 250 k, ~11 k tokens rendus à la conversation](docs/contexte.fr.svg)
 
 Les seuils sont exacts : compactage vers 500 000 tokens avant, plafond de 250 000 après. Les chiffres
 du démarrage sont des ordres de grandeur, mesurés au premier tour de nos sessions (champ `usage` des
