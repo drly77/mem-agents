@@ -67,6 +67,26 @@ Ce que nous avons fait :
 Le point de reprise (`mem point`) est ce qui rend le /clear sûr : l'agent repart d'un contexte
 vide, mais avec un état écrit par lui-même, et `mem` pour le reste.
 
+## Comment ça marche
+
+```mermaid
+flowchart LR
+  Q["question<br/>mem chercher"] --> W["index des mots<br/>SQLite FTS5, BM25"]
+  Q --> S["index du sens<br/>bge-m3, Ollama local"]
+  W --> F["fusion des deux classements<br/>RRF"]
+  S --> F
+  F --> R["reclassement des 10 premiers<br/>Qwen3-Reranker-4B<br/>service mem-reclasseur, socket Unix"]
+  R --> A["passages classés<br/>note:ligne"]
+  N[("notes .md<br/>seule source de vérité")] -. "réindexées si elles changent" .-> W
+  N -.-> S
+```
+
+- Les notes ne sont jamais modifiées par une recherche : `mem` tient à côté un index
+  (`~/.local/share/mem/<projet>.db`), refait pour les seules notes qui ont changé.
+- Le sens et le reclassement sont facultatifs : sans Ollama, la recherche s'arrête aux mots ;
+  `--vite` s'arrête après la fusion (~0,3 s au lieu de ~7 s).
+- Tout reste sur la machine : Ollama en local, et le reclasseur ne fait aucun appel réseau.
+
 ## Installation
 
 1. **Le script** (Python 3.11 ou plus, testé avec 3.11 et 3.12 ; numpy pour la recherche par le sens) :
@@ -116,6 +136,17 @@ Le cycle proposé, avec les fichiers du dossier `integration/` :
    `integration/settings.json.extrait` à `~/.claude/settings.json`. À chaque session qui démarre
    après un /clear ou un /compact, son texte est ajouté au contexte : l'agent relit son point,
    fait sa section « À FAIRE EN PREMIER », et cherche avec `mem` avant d'affirmer un état passé.
+
+```mermaid
+flowchart LR
+  T["l'agent travaille<br/>et cherche avec mem"] --> P["/avant-clear<br/>il écrit son point de reprise"]
+  G["hook Stop, non fourni<br/>plafond de contexte"] -.-> P
+  P --> MP["mem point<br/>ancien point archivé mot pour mot,<br/>contrôle, commit"]
+  MP --> C["/clear ou /compact"]
+  C --> H["hook SessionStart<br/>mem-reprise"]
+  H --> L["l'agent relit son point<br/>et fait « à faire en premier »"]
+  L --> T
+```
 
 `mem` reconnaît ces points (« POINT DE REPRISE ») : les plus anciens passent derrière les règles
 durables, sauf si la question demande le « dernier » état. Plusieurs agents sur un même projet :

@@ -67,6 +67,26 @@ What we did:
 The handover note (`mem point`) is what makes /clear safe: the agent restarts from an empty context,
 but with a state it wrote itself, and `mem` for everything else.
 
+## How it works
+
+```mermaid
+flowchart LR
+  Q["question<br/>mem chercher"] --> W["word index<br/>SQLite FTS5, BM25"]
+  Q --> S["meaning index<br/>bge-m3, local Ollama"]
+  W --> F["merge both rankings<br/>RRF"]
+  S --> F
+  F --> R["rerank the top 10<br/>Qwen3-Reranker-4B<br/>mem-reclasseur service, Unix socket"]
+  R --> A["ranked passages<br/>note:line"]
+  N[("Markdown notes<br/>the only source of truth")] -. "reindexed when they change" .-> W
+  N -.-> S
+```
+
+- A search never modifies the notes: `mem` keeps an index next to them
+  (`~/.local/share/mem/<project>.db`), rebuilt only for the notes that changed.
+- Meaning and reranking are optional: without Ollama, search stops at words;
+  `--vite` stops after the merge (~0.3 s instead of ~7 s).
+- Everything stays on the machine: Ollama runs locally, and the reranker makes no network calls.
+
 ## Install
 
 1. **The script** (Python 3.11 or later, tested with 3.11 and 3.12; numpy for search by meaning):
@@ -115,6 +135,17 @@ The suggested cycle, with the files in `integration/` (written in French; transl
    `integration/settings.json.extrait` into `~/.claude/settings.json`. Every session that starts after
    a /clear or /compact gets its text in context: the agent rereads its handover note, does its
    "do this first" section, and searches with `mem` before stating any past state.
+
+```mermaid
+flowchart LR
+  T["the agent works<br/>and searches with mem"] --> P["/avant-clear<br/>it writes its handover note"]
+  G["Stop hook, not included<br/>context ceiling"] -.-> P
+  P --> MP["mem point<br/>previous note archived verbatim,<br/>check, commit"]
+  MP --> C["/clear or /compact"]
+  C --> H["SessionStart hook<br/>mem-reprise"]
+  H --> L["the agent rereads its note<br/>and does its first steps"]
+  L --> T
+```
 
 `mem` recognises these notes ("POINT DE REPRISE"): older ones rank below lasting rules, unless the
 question asks for the "latest" state. Several agents on one project:
