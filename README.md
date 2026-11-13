@@ -76,10 +76,12 @@ What we did:
 
 ![The context window before and after: ≈ 55k then ≈ 44k tokens at startup; at worst 500k then 250k reread every turn](docs/context.en.svg)
 
-Measured on our sessions: on the first turn, ≈ 55,000 tokens before the startup files were cut, ≈ 44,000
-after (the `usage` field of Claude Code transcripts). The share of CLAUDE.md and MEMORY.md is estimated
-from their size; the rest is Claude Code's own. At worst, a turn used to reread ~500,000 tokens; it now
-rereads ~250,000 at most.
+The thresholds are exact: compaction around 500,000 tokens before, a 250,000 ceiling after. The startup
+figures are orders of magnitude, measured on the first turn of our sessions (the `usage` field of Claude
+Code transcripts): 46,000 to 60,000 tokens over 3 sessions before, 37,000 to 45,000 over 11 sessions
+after. The share of CLAUDE.md and MEMORY.md is estimated from their size; the rest is Claude Code's own,
+which varies with its version and enabled tools (we had also turned off unused connectors). At worst, a
+turn used to reread ~500,000 tokens; it now rereads ~250,000 at most.
 
 The handover note (`mem point`) is what makes /clear safe: the agent restarts from an empty context,
 but with a state it wrote itself, and `mem` for everything else.

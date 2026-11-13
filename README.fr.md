@@ -77,10 +77,12 @@ Ce que nous avons fait :
 
 ![La fenêtre de contexte avant et après : au démarrage ≈ 55 k puis ≈ 44 k tokens ; au pire 500 k puis 250 k relus à chaque tour](docs/contexte.fr.svg)
 
-Mesuré sur nos sessions : au premier tour, ≈ 55 000 tokens avant la réduction des fichiers, ≈ 44 000
-après (champ `usage` des transcriptions de Claude Code). La part de CLAUDE.md et MEMORY.md est
-estimée d'après leur taille, le reste revient à Claude Code. Au pire, un tour relisait ~500 000 tokens ;
-il en relit au plus ~250 000.
+Les seuils sont exacts : compactage vers 500 000 tokens avant, plafond de 250 000 après. Les chiffres
+du démarrage sont des ordres de grandeur, mesurés au premier tour de nos sessions (champ `usage` des
+transcriptions de Claude Code) : 46 000 à 60 000 tokens sur 3 sessions d'avant, 37 000 à 45 000 sur
+11 sessions d'après. La part de CLAUDE.md et MEMORY.md est estimée d'après leur taille, le reste revient
+à Claude Code, dont la part varie avec sa version et les outils activés (nous avions aussi coupé des
+connecteurs inutilisés). Au pire, un tour relisait ~500 000 tokens ; il en relit au plus ~250 000.
 
 Le point de reprise (`mem point`) est ce qui rend le /clear sûr : l'agent repart d'un contexte
 vide, mais avec un état écrit par lui-même, et `mem` pour le reste.

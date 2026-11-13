@@ -3,14 +3,15 @@
   text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;font-size:13px;fill:#1f2328}
   .p{font-size:11.5px;fill:#59636e} .b{font-weight:600} .w{fill:#ffffff;font-size:11.5px}
   .cc{fill:#8c959f} .fi{fill:#d4a72c} .cv{fill:#0969da} .tr{stroke:#59636e;stroke-width:1} .hl{stroke:#d1d9e0}
-  .bord{fill:none;stroke:#d1d9e0} .seuil{stroke:#cf222e;stroke-width:2;stroke-dasharray:4 3} .rs{fill:#cf222e}
+  .fond{fill:#ffffff;stroke:#d1d9e0} .bord{fill:none;stroke:#d1d9e0} .seuil{stroke:#cf222e;stroke-width:2;stroke-dasharray:4 3} .rs{fill:#cf222e}
   @media (prefers-color-scheme:dark){
     text{fill:#e6edf3} .p{fill:#9198a1} .cc{fill:#656c76} .fi{fill:#bb8009} .cv{fill:#1f6feb}
-    .tr{stroke:#9198a1} .hl{stroke:#3d444d} .bord{stroke:#3d444d} .seuil{stroke:#f85149} .rs{fill:#f85149}}
+    .fond{fill:#0d1117;stroke:#3d444d} .tr{stroke:#9198a1} .hl{stroke:#3d444d} .bord{stroke:#3d444d} .seuil{stroke:#f85149} .rs{fill:#f85149}}
 </style>
 <defs><pattern id="h" patternUnits="userSpaceOnUse" width="7" height="7" patternTransform="rotate(45)">
 <line x1="0" y1="0" x2="0" y2="7" class="hl" stroke-width="2"/></pattern></defs>
-<text x="120" y="20" class="b">1-million-token window: what every turn rereads</text>
+<rect x="0.5" y="0.5" width="759" height="439" rx="8" class="fond"/>
+<text x="120" y="24" class="b">1-million-token window: what every turn rereads</text>
 <line x1="120.0" y1="30" x2="120.0" y2="36" class="tr"/>
 <text x="120.0" y="48" class="p" text-anchor="middle">0</text>
 <line x1="270.0" y1="30" x2="270.0" y2="36" class="tr"/>
