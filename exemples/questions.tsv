@@ -1,0 +1,9 @@
+# Banc d'exemple : « question<TAB>note attendue[,autre note] ». Lancer : mem --dossier exemples/memoire bench exemples/questions.tsv
+qui a le droit de mettre en ligne ?	project/deploiement.md
+à quelle heure part la mise en production du soir ?	project/deploiement.md
+comment changer le schéma de la base ?	project/base-de-donnees.md
+combien de temps garde-t-on les sauvegardes ?	project/base-de-donnees.md
+je veux réécrire l'historique de ma branche, puis-je ?	feedback/pas-de-force-push.md
+les tests prennent trop de temps, que faire ?	feedback/tests-lents.md
+où voir les erreurs 500 du site ?	reference/supervision.md
+qui est prévenu quand le site tombe ?	reference/supervision.md

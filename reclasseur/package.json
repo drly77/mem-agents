@@ -1,0 +1,10 @@
+{
+  "name": "mem-reclasseur",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Reclasseur local de mem (Qwen3-Reranker-4B par node-llama-cpp, sans réseau)",
+  "dependencies": {
+    "node-llama-cpp": "3.20.0"
+  }
+}

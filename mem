@@ -1,0 +1,1117 @@
+#!/usr/bin/env python3
+"""mem : chercher dans la mémoire des agents, sans réseau ni modèle distant.
+
+Les notes .md du dossier mémoire restent la source ; ce script n'en tient
+qu'un index SQLite FTS5 (BM25, accents ignorés), reconstruit dès que
+l'empreinte des notes change (ajout, modification, suppression, restauration).
+Aucune ligne qui ressemble à un secret n'entre dans l'index : elle est
+comptée dans `mem etat`, sans son contenu.
+
+    mem chercher "relais B wireguard" [--n 5] [--type project] [--depuis 2026-11-01] [--archives] [--tous] [--vite]
+    mem voir fichier:ligne
+    mem ajouter --type project "titre" < texte
+    mem indexer | mem etat
+    mem selftest   (lignes pièges du filtre de secrets et des commandes, dans une mémoire jetable)
+    mem verifier-perte AVANT APRES
+    mem bench questions.tsv [--n 10]   (top 1, top 3, MRR ; une ligne « question<TAB>note,note »)
+
+Dossier : --dossier, sinon $MEM_DIR, sinon la mémoire Claude Code du dossier
+courant ou de l'un de ses parents (racine git commune comprise, pour les
+worktrees). Aucun repli : hors projet, donner --dossier ou MEM_DIR.
+Base : $MEM_DB, sinon ~/.local/share/mem/<nom du dossier>.db (0600).
+Reclassement : les 10 premiers passages sont renotés par un petit modèle local
+(~/.local/share/mem/reclasseur, sans réseau : ~6-8 s par le service mem-reclasseur, ~9 s sans lui,
+au lieu de 0,3 s) ; --vite ou MEM_RECLASSER=0 s'en passent (aussi pour mem bench).
+S'il échoue, mem le dit sur la sortie d'erreur et rend son classement par mots et sens.
+"""
+
+# ruff: noqa: E741
+from __future__ import annotations
+
+import argparse
+import collections
+import datetime as dt
+import fcntl
+import hashlib
+import json
+import math
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+TAILLE_MAX = 1500  # au-delà, un passage est recoupé à la ligne vide suivante
+PAR_FICHIER = 2  # au plus deux passages d'un même fichier dans les résultats
+
+# Une ligne qui correspond à l'un de ces motifs n'est jamais indexée.
+# Une valeur, pas une commande ($(…)), un chemin, un renvoi ni une valeur déjà masquée.
+VALEUR = r"(?P<v>[\"']?(?![$~/.<(]|\[masqué\])[^\s\"'<>…]{6,})"
+VALEUR_COURTE = VALEUR.replace("{6,}", "{4,}")  # après « mot de passe : » ou « mdp = » : hunter2 compte aussi
+# Après « est » / « vaut » : de la prose (« le mot de passe est requis »). Est pris pour un secret : une valeur
+# entre guillemets (4 caractères), ou de 6 caractères avec un chiffre ou un signe, ou une majuscule après une
+# minuscule (« hunTer », casse stricte : la règle est compilée en re.I). Un mot en minuscules seules (« hunter ») reste gardé : rien ne le distingue de
+# « requis » ou « changé » (compromis voulu).
+_LETTRES = "A-Za-zÀ-ÖØ-öø-ÿŒœ"
+VALEUR_PROSE = (r"(?P<v>(?:"
+                r"[\"'«`]\s?(?![$~/.<(]|\[masqué\])[^\s\"'<>…»`]{4,}\s?[\"'»`]"
+                r"|[\"']?(?![$~/.<(]|\[masqué\])(?=[^\s]*[^\s" + _LETTRES + r"\"'<>…])[^\s\"'<>…]{6,}"
+                r"|[\"']?(?![$~/.<(]|\[masqué\])(?-i:(?=[^\s]*[a-zß-öø-ÿœ][A-ZÀ-ÖØ-ÞŒ]))[^\s\"'<>…]{6,}"
+                r"))")
+MASQUE = "[masqué]"
+RETIRER = {"clé privée", "corps de clé"}  # ligne entière retirée ; ailleurs seule la valeur est masquée
+# Étiquette explicite d'un secret ; « auth_token », « db_password » comptent aussi (préfixe en _), « token_count » non.
+LABEL_SECRET = (r"(?<![A-Za-z0-9])(?:[A-Za-z0-9]+_)*(password|passwd|passphrase|secret(?:[_ -]?key)?|token|jeton"
+                r"|api[_ -]?key|cl[eé][_ -]?(?:api|secr[eè]te|priv[eé]e)|mot[_ -]?de[_ -]?passe|motdepasse|mdp)\b")
+SECRETS = [
+    ("clé privée", re.compile(r"PrivateKey\s*=|-----BEGIN [A-Z0-9 _-]*PRIVATE KEY", re.I)),
+    ("jeton", re.compile(
+        r"\b(sk-[A-Za-z0-9_-]{20,}|sk_(?:live|test|or)_[A-Za-z0-9_-]{10,}|gh[pousr]_[A-Za-z0-9]{20,}"
+        r"|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|xapp-[A-Za-z0-9-]{10,}"
+        r"|AGE-SECRET-KEY-1[0-9A-Z]{50,}|hf_[A-Za-z]{30,}|api_org_[A-Za-z]{30,}|hv[sb]\.[A-Za-z0-9_-]{24,}"
+        r"|ZXlK[A-Za-z0-9+/=]{20,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]+)?|(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}"
+        r"|AIza[0-9A-Za-z_-]{30,}|\d{8,10}:AA[A-Za-z0-9_-]{30,})")),
+    ("bcrypt", re.compile(r"\$2[aby]\$\d\d\$[./A-Za-z0-9]{20,}")),
+    ("url à identifiants", re.compile(r"://[^/\s:@]+:[^/\s@]+@|\bcurl\b.*\s-u\s*\S+:\S+")),
+    ("authorization", re.compile(r"Authorization:\s*(Bearer|Basic|Token)\s+\S{8,}", re.I)),
+    ("json", re.compile(r"\"(token|password|secret|api[_-]?key|access[_-]?key)\"\s*:\s*\"[^\"]{6,}\"", re.I)),
+    ("mot de passe", re.compile(
+        LABEL_SECRET +
+        r"[^\n:=]{0,40}?\s*[:=]\s*" + VALEUR_COURTE, re.I)),
+    ("mot de passe", re.compile(  # « … est … » / « … vaut … » : de la prose, donc 6 caractères au moins et sans « jeton »
+        r"\b(password|passwd|passphrase|secret|token|api[_-]?key|cle[_-]?api|clé[_ ]api|mot de passe|mdp)\b" +
+        r"[^\n:=]{0,40}?(\s+est\s+|\s+vaut\s+)" + VALEUR_PROSE, re.I)),
+    ("corps de clé", re.compile(r"^\s*[A-Za-z0-9+/]{60,}={0,2}\s*$")),
+    ("variable secrète", re.compile(r"\b[A-Za-z0-9_]*(KEY|TOKEN|SECRET|PASSWORD|PASSWD|_PASS|cle_api)\s*=\s*" + VALEUR)),
+]
+# Une clé base64 de 44 caractères (WireGuard) n'est gardée que si la ligne dit qu'elle est publique.
+CLE_44 = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=?(?![A-Za-z0-9+/=])")
+# Toute autre suite base64 de 40 caractères ou plus, mêlant majuscules, minuscules et chiffres : même règle.
+CLE_B64 = re.compile(
+    r"(?<![A-Za-z0-9+/=_-])(?=[A-Za-z0-9+/]*[A-Z])(?=[A-Za-z0-9+/]*[a-z])(?=[A-Za-z0-9+/]*\d)"
+    r"[A-Za-z0-9+/]{40,}={0,2}(?![A-Za-z0-9+/=_-])")
+PUBLIQUE = re.compile(r"\b(public|publique|pubkey|PublicKey)\b", re.I)
+PRIVEE = re.compile(r"priv|secr|\b(pas|non|not|ni|jamais)\b\W+(\w+\W+){0,2}(public|publique|pubkey)", re.I)
+# Un hex de 64 caractères n'est gardé que si la ligne dit que c'est une empreinte.
+HEX_64 = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{64}(?![0-9a-fA-F])")
+EMPREINTE = re.compile(r"sha-?256|empreinte|digest|fingerprint", re.I)
+DEBUT_BLOC = re.compile(r"-----BEGIN [A-Z0-9 _-]*(PRIVATE KEY|OPENSSH)")
+FIN_BLOC = re.compile(r"-----END ")
+DANS_BLOC = re.compile(r"[A-Za-z0-9+/=\s]*|\s*(Proc-Type|DEK-Info|Comment):.*")  # sinon le bloc n'a pas de fin
+
+# Idée de generic-api-key (gitleaks) : une valeur de variable qui a l'air tirée au hasard (entropie de Shannon
+# > 3,5 bits par caractère). Nom de clé (KEY_ID=, api:) : 10 caractères dont un chiffre suffisent ; tout autre
+# VARIABLE= (OPENAI=…) : 12 caractères mêlant majuscules, minuscules et chiffres.
+GENERIQUE = re.compile(
+    r"\b(?:(?P<cle>[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASS|AUTH|CRED|API)[A-Za-z0-9_]*)\s*[=:]|[A-Za-z_][A-Za-z0-9_]*=)"
+    r"\s*[\"']?(?P<v>[A-Za-z0-9+/_.=-]{10,})", re.I)
+
+
+def entropie(valeur: str) -> float:
+    return -sum(n / len(valeur) * math.log2(n / len(valeur)) for n in collections.Counter(valeur).values())
+
+
+def aleatoire(m: re.Match) -> bool:
+    v = m.group("v")
+    if not m.group("cle") and (len(v) < 12 or not (re.search(r"[A-Z]", v) and re.search(r"[a-z]", v))):
+        return False
+    return any(c.isdigit() for c in v) and entropie(v) > 3.5
+
+
+MOTS_VIDES = set(
+    "le la les l un une des de du d et ou est sont a au aux en dans sur pour par avec sans ce cet cette ces"
+    " à qui que quoi quel quelle quels quelles qu se sa son ses il elle on ne pas plus y comment faut fait"
+    " où quand pourquoi combien the of to is règle règles regle regles".split()
+)
+# « dernier point de reprise », « prod actuelle » : le plus récent d'abord, le mot lui-même ne compte pas.
+# Même idée, autres mots : « écrire au relecteur » doit trouver « envoie la relecture ».
+# Groupes propres à un projet : un fichier en plus (voir _synonymes_perso), jamais dans ce script.
+SYNONYMES = [
+    {"écrire", "envoyer", "envoie", "contacter", "joindre", "message", "sendmessage"},
+    {"cron", "crontab", "minuterie", "minuteries", "timer"},
+    {"logs", "log", "journaux", "journal"},
+    {"avocat", "juriste", "juridique"},
+    {"relecteur", "relecture", "relire", "review"},
+    {"déploiement", "déployer", "déploie", "déployé", "déploient"},
+    {"llm", "modèle", "modèles"},
+    {"conteneur", "conteneurs", "vm"},
+    {"idée", "idées", "suggestion", "suggestions", "proposer"},
+    {"css", "écran", "interface"},
+    {"effacer", "supprimer", "supprime", "rm", "retirer"},
+    {"serveur", "vps"},
+]
+
+
+def _synonymes_perso() -> list[set[str]]:
+    """Groupes en plus, propres à un projet (« relecteur, relecture, revue-de-code ») : un groupe par ligne, mots
+    séparés par des virgules, « # » pour un commentaire. $MEM_SYNONYMES, sinon ~/.config/mem/synonymes.txt."""
+    defaut = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "mem" / "synonymes.txt"
+    try:
+        lignes = Path(os.environ.get("MEM_SYNONYMES") or defaut).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    groupes = ({m.strip().lower() for m in l.split(",") if m.strip()} for l in lignes if not l.lstrip().startswith("#"))
+    return [g for g in groupes if len(g) > 1]
+
+
+
+for _g in _synonymes_perso():  # un mot déjà connu : son groupe s'agrandit (un mot n'appartient qu'à un groupe)
+    _lies = [s for s in SYNONYMES if s & _g]
+    for _s in _lies:
+        _s |= _g
+    if not _lies:
+        SYNONYMES.append(_g)
+# Expressions remplacées avant le découpage en mots.
+EXPRESSIONS = {"mise en ligne": "déploiement", "mettre en ligne": "déployer", "mis en ligne": "déployé",
+               "mise en prod": "déploiement", "mettre en prod": "déployer"}
+# Recherche par le sens : bge-m3 servi par un Ollama local, jamais un modèle ni un hôte distants.
+# Sans Ollama (ou MEM_SENS=0), mem cherche par mots seulement.
+SENS_URL = os.environ.get("MEM_SENS_URL", "http://127.0.0.1:11434/api/embed")
+SENS_MODELE = "bge-m3"
+SENS_LOT, SENS_DELAI = 32, 60  # passages par requête ; secondes
+K_RRF, POIDS_SENS = 60, 0.5  # fusion des deux classements : Σ poids / (K_RRF + rang)
+POIDS_TITRE = 2.0  # bm25 : texte ×1, titre ×POIDS_TITRE
+POIDS_DESCRIPTION = 1.5  # passage de description (ligne 1 d'une note avec en-tête)
+AGE_JOURNAL, FACTEUR_JOURNAL = 14, 0.6  # passage d'une note à POINT DE REPRISE plus vieux que AGE_JOURNAL jours
+# Reclassement : Qwen3-Reranker-4B par node-llama-cpp, seul juge de l'ordre des K_RECLASSE premiers passages
+# (banc privé de 200 questions : MRR 0,65 → 0,74 ; banc de 50 tenu à l'écart : 0,69 → 0,78).
+RECLASSEUR = Path(os.environ.get("MEM_RECLASSEUR", Path.home() / ".local" / "share" / "mem" / "reclasseur"))
+K_RECLASSE, DELAI_RECLASSE = 10, 60  # passages renotés ; secondes
+# Serveur qui garde le modèle chargé (serveur.mjs) : essayé d'abord ; absent, mem lance reclasser.mjs.
+SOCKET_RECLASSEUR = Path(os.environ.get("MEM_RECLASSEUR_SOCKET",
+                                        Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "mem-reclasseur.sock"))
+RECENT = {"dernier", "dernière", "derniers", "dernières", "actuel", "actuelle", "actuels", "récent", "récente"}
+
+DATE_ISO = re.compile(r"\b(20\d\d)-(\d\d)-(\d\d)\b")
+DATE_FR = re.compile(r"\b(\d{1,2})/(\d{1,2})(?:/(20\d\d))?\b")
+TETE = re.compile(r"^[\s\-#*>]*(?:\*\*)?(?:POINT DE REPRISE\s+|MAJ\s+|Le\s+)?", re.I)
+
+
+def projets() -> list[Path]:
+    """Racines des mémoires par projet : MEM_PROJETS (séparées par « : »), sinon Claude Code puis OpenClaude."""
+    if os.environ.get("MEM_PROJETS"):  # vide ou « : » : les racines par défaut
+        racines = [Path(x).expanduser() for x in os.environ["MEM_PROJETS"].split(":") if x]
+        if racines:
+            return racines
+    return [Path.home() / ".claude" / "projects", Path.home() / ".openclaude" / "projects"]
+
+
+def memoire_de(dossier: Path) -> Path:
+    nom = str(dossier).replace("/", "-").replace(".", "-")
+    for racine in projets():
+        if (racine / nom / "memory").is_dir():
+            return racine / nom / "memory"
+    return projets()[0] / nom / "memory"
+
+
+def dossier_par_defaut() -> Path | None:
+    """La mémoire du dossier courant ou d'un parent ; pour un worktree, celle du dépôt principal."""
+    if os.environ.get("MEM_DIR"):
+        return Path(os.environ["MEM_DIR"]).expanduser()
+    candidats = [Path.cwd(), *Path.cwd().parents]
+    try:
+        commun = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        if commun:
+            candidats.insert(1, Path(commun).parent)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    for d in candidats:
+        # On ne remonte pas jusqu'à ~ : la mémoire d'une session ouverte dans ~ n'est pas celle d'un sous-dossier.
+        if d != Path.cwd() and Path.home().is_relative_to(d):
+            continue
+        m = memoire_de(d)
+        if m.is_dir():
+            return m
+    return None  # jamais de mémoire d'un autre projet par défaut : MEM_DIR ou --dossier
+
+
+def base_par_defaut(dossier: Path) -> Path:
+    if os.environ.get("MEM_DB"):
+        return Path(os.environ["MEM_DB"]).expanduser()
+    nom = dossier.parent.name if dossier.name == "memory" else dossier.name
+    return Path.home() / ".local" / "share" / "mem" / f"{nom.strip('-') or 'racine'}.db"
+
+
+def motif_secret(ligne: str) -> str | None:
+    for nom, motif in SECRETS:
+        if motif.search(ligne):
+            return nom
+    if (CLE_44.search(ligne) or CLE_B64.search(ligne)) and (not PUBLIQUE.search(ligne) or PRIVEE.search(ligne)):
+        return "clé base64"
+    if HEX_64.search(ligne) and (not EMPREINTE.search(ligne) or PRIVEE.search(ligne)):
+        return "hex 64"
+    publique = PUBLIQUE.search(ligne) and not PRIVEE.search(ligne)  # « PublicKey = … » : même règle que CLE_44
+    if not publique and any(aleatoire(m) for m in GENERIQUE.finditer(ligne)):
+        return "valeur aléatoire"
+    return None
+
+
+def masquer_motif(rx: re.Pattern, ligne: str, garde=None) -> str:
+    # Le masque part de la valeur (groupe v) ou du motif entier, et va jusqu'au blanc suivant :
+    # « Abc12345<Zz9876qq » ne laisse rien derrière le « < ».
+    morceaux, pos = [], 0
+    for m in rx.finditer(ligne):
+        if garde and not garde(m):
+            continue
+        debut = m.start("v") if "v" in rx.groupindex else m.start()
+        if debut < pos:
+            continue
+        morceaux += [ligne[pos:debut], MASQUE]
+        pos = re.compile(r"\S*").match(ligne, m.end()).end()
+    return "".join(morceaux) + ligne[pos:]
+
+
+def masquer(ligne: str) -> tuple[str | None, str | None]:
+    """(ligne à indexer, motif) : la valeur suspecte devient [masqué] et la règle autour reste trouvable ;
+    None si la ligne doit être retirée en entier (clé privée, ou toujours suspecte après masquage)."""
+    motif = motif_secret(ligne)
+    if not motif:
+        return ligne, None
+    if motif in RETIRER:
+        return None, motif
+    for _ in range(4):  # un masquage peut faire apparaître une autre « valeur » plus loin sur la ligne
+        for rx in [rx for _, rx in SECRETS] + [CLE_44, CLE_B64, HEX_64]:
+            ligne = masquer_motif(rx, ligne)
+        ligne = masquer_motif(GENERIQUE, ligne, aleatoire)
+        if not motif_secret(ligne):
+            return ligne, motif
+    return None, motif
+
+
+def lire_entete(lignes: list[str]) -> tuple[dict, int]:
+    """Frontmatter YAML simple (clé: valeur, une ligne) ; renvoie (champs, première ligne du corps)."""
+    if not lignes or lignes[0].strip() != "---":
+        return {}, 0
+    champs = {}
+    for i, l in enumerate(lignes[1:], start=1):
+        if l.strip() == "---":
+            return champs, i + 1
+        m = re.match(r"\s*([A-Za-z_]+):\s*(.*)$", l)
+        if m and m.group(2):
+            champs.setdefault(m.group(1), m.group(2).strip().strip('"'))
+    return {}, 0
+
+
+def date_du_passage(texte: str, modifie: str) -> str | None:
+    # Date d'écriture en tête d'entrée (« - 08/11 … », « ## 2026-11-08 »), jamais une date citée plus loin.
+    tete = TETE.sub("", texte[:60], count=1)[:12]
+    m = DATE_ISO.match(tete)
+    if m:
+        return "-".join(m.groups())
+    m = DATE_FR.match(tete)
+    if m:
+        j, mo, a = int(m.group(1)), int(m.group(2)), m.group(3) or modifie[:4]
+        try:
+            d = dt.date(int(a), mo, j)
+        except ValueError:
+            return None
+        # Plus de deux mois après la dernière écriture du fichier : c'est l'an passé (un rappel « 19/11 » écrit le 12/11 reste à venir).
+        if not m.group(3) and d > dt.date.fromisoformat(modifie[:10]) + dt.timedelta(days=60):
+            try:
+                d = d.replace(year=d.year - 1)
+            except ValueError:  # 29/02
+                return None
+        return d.isoformat()
+    return None
+
+
+def decouper(chemin: Path, racine: Path):
+    """Passages d'une note : coupés par titre (#) ou entrée de liste de premier niveau."""
+    lignes = chemin.read_text(encoding="utf-8", errors="replace").splitlines()
+    entete, debut = lire_entete(lignes)
+    rel = str(chemin.relative_to(racine))
+    refus = []
+    # L'en-tête passe par le même filtre que le corps : un champ suspect est retiré, quel qu'il soit.
+    for n, l in enumerate(lignes[:debut], start=1):
+        motif = motif_secret(l)
+        if motif:
+            refus.append((rel, n, motif))
+            m = re.match(r"\s*([A-Za-z_]+):", l)
+            if m:
+                entete.pop(m.group(1), None)
+    type_ = entete.get("type") or (rel.split("/")[0] if "/" in rel else "index")
+    if rel.startswith("archive/"):
+        type_ = "archive"
+    modifie = entete.get("modified", "")[:10] or dt.date.fromtimestamp(chemin.stat().st_mtime).isoformat()
+    # Repère de l'année d'une date sans année : la dernière écriture réelle (le « modified: » d'en-tête retarde souvent).
+    reference = max(modifie, dt.date.fromtimestamp(chemin.stat().st_mtime).isoformat())
+    nom = entete.get("name") or chemin.stem
+    auteur = entete.get("auteur", "")
+    passages = []
+    courant, ligne0 = [], debut + 1
+    section = {"date": None, "titre": ""}  # dernier titre : sa date vaut pour les entrées non datées qui suivent
+
+    def clore():
+        texte = "\n".join(courant).strip()
+        if not texte:
+            return
+        date = date_du_passage(texte, reference)
+        if texte.startswith("#"):
+            section["titre"] = texte.splitlines()[0].lstrip("# ").strip()[:120]
+            if date:
+                section["date"] = date
+        elif date and ("POINT DE REPRISE" in texte[:40].upper() or date > (section["date"] or "")):
+            section["date"] = date  # une entrée non datée suit la dernière entrée datée de sa section
+        titre = lisible(nom) + (" / " + section["titre"] if section["titre"] and not texte.startswith("#") else "")
+        passages.append((rel, ligne0, date or section["date"] or modifie, type_, auteur, titre, texte))
+
+    if entete.get("description"):
+        passages.append((rel, 1, modifie, type_, auteur, lisible(nom), entete["description"]))
+    dans_bloc = False
+    for n, l in enumerate(lignes[debut:], start=debut + 1):
+        if DEBUT_BLOC.search(l):
+            dans_bloc = True
+        if dans_bloc and not (DEBUT_BLOC.search(l) or FIN_BLOC.search(l) or DANS_BLOC.fullmatch(l)):
+            refus.append((rel, n, "bloc de clé sans END : fermé avant cette ligne"))
+            dans_bloc = False
+        if dans_bloc:
+            refus.append((rel, n, "bloc de clé"))
+            if FIN_BLOC.search(l):
+                dans_bloc = False
+            continue
+        texte, motif = masquer(l)
+        if motif:
+            refus.append((rel, n, motif + (" : valeur masquée" if texte is not None else "")))
+            if texte is None:
+                continue
+            l = texte
+        nouveau = l.startswith("#") or l.startswith("- ") or (l.strip() == "" and sum(map(len, courant)) > TAILLE_MAX)
+        if nouveau and courant:
+            clore()
+            courant = []
+        if not courant:
+            ligne0 = n
+        if l.strip() or courant:
+            courant.append(l)
+    clore()
+    return passages, refus
+
+
+def lisible(nom: str) -> str:
+    # « tache49-bout-en-bout » → « tache 49 bout en bout » : le titre se cherche aussi par « 49 ».
+    return re.sub(r"(?<=[^\W\d_])(?=\d)", " ", nom.replace("-", " "))
+
+
+def sens_actif() -> bool:
+    if os.environ.get("MEM_SENS", "1") == "0":
+        return False
+    return urllib.parse.urlparse(SENS_URL).hostname in ("127.0.0.1", "localhost", "::1")
+
+
+def raison_sens() -> str:
+    """Pourquoi le sens manque : Ollama injoignable ou modèle absent."""
+    import json
+    u = urllib.parse.urlparse(SENS_URL)
+    base = f"{u.scheme}://{u.netloc}"
+    try:
+        direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # jamais par un proxy
+        with direct.open(base + "/api/tags", timeout=3) as r:
+            modeles = [m.get("name", "") for m in json.load(r).get("models", [])]
+    except (OSError, ValueError):  # réseau, délai, URL mal formée (InvalidURL), JSON illisible ; un bogue d'ici
+        # plante bruyamment au lieu d'un faux diagnostic
+        return f"Ollama injoignable ou adresse invalide ({base}) : vérifier MEM_SENS_URL, démarrer Ollama"
+    if not any(m.split(":")[0] == SENS_MODELE.split(":")[0] for m in modeles):
+        return f"modèle {SENS_MODELE} absent : « ollama pull {SENS_MODELE} »"
+    return "Ollama répond : le calcul a sans doute été interrompu"
+
+
+def vecteurs(textes: list[str], delai: float = SENS_DELAI) -> list | None:
+    """Vecteurs normalisés (float32) ; None si Ollama ne répond pas."""
+    try:
+        import numpy as np
+
+        # keep_alive -1 : bge-m3 reste chargé (sinon Ollama le décharge après 5 min et la recherche suivante
+        # perd 3 à 4 s). MEM_SENS_GARDER=0 revient au délai d'Ollama.
+        corps = {"model": SENS_MODELE, "input": textes}
+        if os.environ.get("MEM_SENS_GARDER", "1") != "0":
+            corps["keep_alive"] = -1
+        corps = json.dumps(corps).encode()
+        req = urllib.request.Request(SENS_URL, corps, {"Content-Type": "application/json"})
+        # Jamais par un proxy : http_proxy ne contourne pas 127.0.0.1 de lui-même.
+        direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with direct.open(req, timeout=delai) as r:
+            m = np.asarray(json.load(r)["embeddings"], dtype=np.float32)
+        return list(m / np.maximum(np.linalg.norm(m, axis=1, keepdims=True), 1e-9))
+    except Exception:  # réseau, modèle absent, numpy absent : on reste sur les mots
+        return None
+
+
+def base_sens(base: Path) -> Path:
+    # « x.db » -> « x.sens.db » (nom historique) ; tout autre nom garde le sien entier : x.sqlite -> x.sqlite.sens.db
+    return base.with_suffix(".sens.db") if base.suffix == ".db" else base.with_name(base.name + ".sens.db")  # cache des vecteurs, par empreinte du passage : survit aux réindexations
+
+
+def calculer_sens(con: sqlite3.Connection, base: Path) -> None:
+    """Associe à chaque passage le vecteur de son texte (masqué) ; ne calcule que les textes nouveaux."""
+    con.execute("CREATE TABLE sens(rowid INTEGER PRIMARY KEY, h TEXT)")
+    if not sens_actif():
+        return
+    lignes = con.execute("SELECT rowid, titre, texte FROM passages").fetchall()
+    cles = {r[0]: hashlib.sha256(f"{SENS_MODELE}\0{r[1]}\0{r[2]}".encode()).hexdigest() for r in lignes}
+    cache = sqlite3.connect(base_sens(base))
+    try:
+        os.chmod(base_sens(base), 0o600)
+        cache.execute("CREATE TABLE IF NOT EXISTS v(h TEXT PRIMARY KEY, v BLOB)")
+        connus = {h for (h,) in cache.execute("SELECT h FROM v")}
+        a_faire = [r for r in lignes if cles[r[0]] not in connus]
+        for i in range(0, len(a_faire), SENS_LOT):
+            lot = a_faire[i:i + SENS_LOT]
+            vs = vecteurs([f"{t}\n{x}"[:2000] for _, t, x in lot])
+            if vs is None:
+                break  # Ollama absent : les passages restants seront faits à la prochaine réindexation
+            cache.executemany("INSERT OR REPLACE INTO v VALUES (?, ?)",
+                              [(cles[r[0]], v.tobytes()) for r, v in zip(lot, vs)])
+            cache.commit()
+        presents = {h for (h,) in cache.execute("SELECT h FROM v")}
+        cache.executemany("DELETE FROM v WHERE h = ?", [(h,) for h in presents - set(cles.values())])
+        cache.commit()
+        con.executemany("INSERT INTO sens VALUES (?, ?)", [(i, h) for i, h in cles.items() if h in presents])
+    finally:
+        cache.close()
+
+
+def notes(racine: Path):
+    return sorted(p for p in racine.rglob("*.md") if p.is_file() and not any(part.startswith(".") for part in p.relative_to(racine).parts))
+
+
+def empreinte(racine: Path) -> str:
+    h = hashlib.sha256(Path(__file__).read_bytes())  # une nouvelle version de mem refait aussi l'index
+    h.update(b"sens" if sens_actif() else b"mots")  # index fait avec MEM_SENS=0 : refait quand le sens revient
+    for p in notes(racine):
+        st = p.stat()
+        h.update(f"{p.relative_to(racine)}\0{st.st_mtime_ns}\0{st.st_size}\n".encode())
+    return h.hexdigest()
+
+
+def empreinte_de_la_base(base: Path) -> str | None:
+    try:
+        con = sqlite3.connect(f"file:{base}?mode=ro", uri=True)
+        try:
+            row = con.execute("SELECT valeur FROM info WHERE cle = 'empreinte'").fetchone()
+        finally:
+            con.close()
+        return row[0] if row else None
+    except sqlite3.Error:
+        return None
+
+
+def indexer(racine: Path, base: Path, si_perime: bool = False) -> tuple[int, int]:
+    """Reconstruit l'index sous verrou, dans un fichier temporaire unique, puis le met en place d'un coup."""
+    base.parent.mkdir(parents=True, exist_ok=True)
+    with open(base.with_suffix(".verrou"), "w") as verrou:
+        fcntl.flock(verrou, fcntl.LOCK_EX)
+        if si_perime and empreinte_de_la_base(base) == empreinte(racine):
+            return 0, 0  # refait entre-temps par un autre agent
+        fd, tmp = tempfile.mkstemp(dir=base.parent, prefix=base.stem + ".", suffix=".tmp")
+        os.close(fd)
+        try:
+            con = sqlite3.connect(tmp)
+            con.executescript(
+                """
+                CREATE VIRTUAL TABLE passages USING fts5(
+                    texte, titre, fichier UNINDEXED, ligne UNINDEXED, date UNINDEXED,
+                    type UNINDEXED, auteur UNINDEXED, tokenize='unicode61 remove_diacritics 2');
+                CREATE TABLE refus(fichier TEXT, ligne INTEGER, motif TEXT);
+                CREATE TABLE info(cle TEXT PRIMARY KEY, valeur TEXT);
+                CREATE TABLE journaux(fichier TEXT PRIMARY KEY);
+                """
+            )
+            total = 0
+            emp = empreinte(racine)
+            for chemin in notes(racine):
+                passages, refus = decouper(chemin, racine)
+                con.executemany(
+                    "INSERT INTO passages(fichier, ligne, date, type, auteur, titre, texte) VALUES (?,?,?,?,?,?,?)",
+                    passages,
+                )
+                con.executemany("INSERT INTO refus VALUES (?,?,?)", refus)
+                if any("POINT DE REPRISE" in p[5].upper() for p in passages):  # note-journal (état daté)
+                    con.execute("INSERT INTO journaux VALUES (?)", (str(chemin.relative_to(racine)),))
+                total += len(passages)
+            calculer_sens(con, base)
+            con.executemany("INSERT INTO info VALUES (?, ?)", [("racine", str(racine)), ("empreinte", emp)])
+            con.commit()
+            nb_refus = con.execute("SELECT count(*) FROM refus").fetchone()[0]
+            con.close()
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, base)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+    return total, nb_refus
+
+
+def assurer_index(racine: Path, base: Path) -> None:
+    """Index à jour avant de lire ; si un autre agent est en train de le refaire, on l'attend."""
+    if empreinte_de_la_base(base) != empreinte(racine):
+        indexer(racine, base, si_perime=True)
+
+
+def requete_fts(termes: list[str], operateur: str) -> str:
+    morceaux = []
+    for t in termes:
+        if "-" in t and not any(t in g for g in SYNONYMES):
+            morceaux.append('"' + " ".join(t.split("-")) + '"')
+        elif t.isdigit():  # « 424 » trouve aussi T424 et P424
+            morceaux.append(f'("{t}" OR "T{t}" OR "P{t}")')
+        else:
+            groupe = next((g for g in SYNONYMES if t in g), {t})
+            morceaux.append("(" + " OR ".join(
+                '"' + " ".join(m.split("-")) + '"' if "-" in m else f'"{m}"*' if len(m) >= 5 else f'"{m}"'
+                for m in sorted(groupe)) + ")")
+    return f" {operateur} ".join(morceaux)
+
+
+def termes_de(mots: str) -> list[str]:
+    # « mot-composé » reste une expression ; les mots vides et interrogatifs ne comptent pas.
+    mots = mots.lower()
+    for expr, mot in EXPRESSIONS.items():
+        mots = mots.replace(expr, mot)
+    termes = [t for t in re.findall(r"\w+(?:-\w+)+|\w+", mots) if t not in MOTS_VIDES | RECENT]
+    if not termes:
+        raise SystemExit("mem : rien à chercher")
+    return termes
+
+
+def date_ou_aujourd_hui(date: str) -> dt.date:
+    try:
+        return dt.date.fromisoformat(date)
+    except ValueError:
+        return dt.date.today()
+
+
+def chercher(racine: Path, base: Path, mots: str, n=5, type_=None, depuis=None, archives=False, auteur=None,
+             reclasse=True):
+    """ET d'abord, puis OU pour compléter ; archives seulement si demandées ou s'il manque des résultats ;
+    BM25 (titre ×2) pondéré par la récence ; au plus PAR_FICHIER passages par fichier."""
+    assurer_index(racine, base)
+    termes = termes_de(mots)
+    recent = any(t in RECENT for t in re.findall(r"\w+", mots.lower()))
+    con = sqlite3.connect(f"file:{base}?mode=ro", uri=True)
+    aujourd_hui = dt.date.today()
+
+    def lancer(operateur: str, avec_archives: bool):
+        sql = (f"SELECT fichier, ligne, date, type, titre, texte, bm25(passages, 1.0, {POIDS_TITRE}) FROM passages "
+               "WHERE passages MATCH ?")
+        args: list = [requete_fts(termes, operateur)]
+        if not avec_archives:
+            sql += " AND type != 'archive'"
+        if not type_:
+            sql += " AND type != 'index'"  # MEMORY.md est déjà dans le contexte de chaque session
+        if type_:
+            sql += " AND type = ?"
+            args.append(type_)
+        if depuis:
+            sql += " AND date >= ?"
+            args.append(depuis)
+        if auteur:
+            sql += " AND (auteur = '' OR auteur = ?)"
+            args.append(auteur)
+        sql += " ORDER BY 7 LIMIT 200"
+        return con.execute(sql, args).fetchall()
+
+    def recence(date: str) -> float:
+        try:
+            jours = (aujourd_hui - dt.date.fromisoformat(date)).days
+        except ValueError:
+            return 0.0
+        return max(0.0, 1.0 - jours / 90)
+
+    journaux = {r[0] for r in con.execute("SELECT fichier FROM journaux")}
+
+    def poids(r) -> float:
+        # bm25 est négatif : plus il est grand en valeur absolue, mieux c'est.
+        p = r[6] * (1 + 0.5 * recence(r[2]))
+        if r[1] == 1:
+            p *= POIDS_DESCRIPTION
+        if r[0] in journaux and not recent and (aujourd_hui - date_ou_aujourd_hui(r[2])).days > AGE_JOURNAL:
+            p *= FACTEUR_JOURNAL  # vieil état : derrière les règles, sauf si l'on demande le « dernier »
+        return p
+
+    # Classement par mots : ET puis OU, archives en dernier ; candidats ordonnés, sans plafond par fichier.
+    vus, mots_ordonnes = set(), []
+    for operateur, avec_archives in (("AND", archives), ("OR", archives), ("AND", True), ("OR", True)):
+        if len(mots_ordonnes) >= max(n * 10, 100):
+            break
+        lot = sorted(lancer(operateur, avec_archives), key=poids)
+        if recent:
+            lot.sort(key=lambda r: r[2], reverse=True)  # tri stable : à date égale, le score départage
+        for r in lot:
+            if (r[0], r[1]) not in vus:
+                vus.add((r[0], r[1]))
+                mots_ordonnes.append(r)
+
+    candidats = mots_ordonnes
+    sens_ordonnes = [] if recent else proches(con, base, mots, archives, type_, depuis, auteur, journaux)
+    if sens_ordonnes:  # fusion des rangs (RRF) : un passage bien placé par l'un ou l'autre remonte
+        score, ligne_de = collections.Counter(), {}
+        for poids_, liste in ((1.0, mots_ordonnes), (POIDS_SENS, sens_ordonnes)):
+            for rang, r in enumerate(liste[:100], start=1):
+                score[(r[0], r[1])] += poids_ / (K_RRF + rang)
+                ligne_de.setdefault((r[0], r[1]), r)
+        candidats = [(*ligne_de[c][:6], -sc) for c, sc in score.most_common()]
+    con.close()
+
+    reclasse = reclasse and not recent and reclassement_actif()  # « dernier » : l'ordre des dates prime
+    resultats, par_fichier = [], collections.Counter()
+    for r in candidats:
+        if par_fichier[r[0]] < PAR_FICHIER:
+            par_fichier[r[0]] += 1
+            resultats.append(r)
+            if len(resultats) >= (max(n, K_RECLASSE) if reclasse else n):
+                break
+    if reclasse:
+        resultats = reclasser(mots, resultats)
+    return resultats[:n]
+
+
+def reclassement_actif() -> bool:
+    return os.environ.get("MEM_RECLASSER", "1") != "0"
+
+
+def node_pour_reclasser() -> str | None:
+    import shutil
+
+    def version(p: Path):
+        return tuple(int(x) for x in re.findall(r"\d+", p.parent.parent.name))
+    # D'abord la version par défaut de nvm (~/.nvm/alias/default, ex. « 24 »), comme le service.
+    try:
+        defaut = (Path.home() / ".nvm" / "alias" / "default").read_text().strip().lstrip("v")
+    except OSError:
+        defaut = ""
+    if re.fullmatch(r"\d+(\.\d+)*", defaut):
+        nvm = sorted(Path.home().glob(f".nvm/versions/node/v{defaut}*/bin/node"), key=version)
+        if nvm:
+            return str(nvm[-1])
+    if shutil.which("node"):
+        return shutil.which("node")
+    nvm = sorted(Path.home().glob(".nvm/versions/node/v*/bin/node"), key=version)
+    return str(nvm[-1]) if nvm else None
+
+
+def noter_par_serveur(question: str, docs: list) -> list | None:
+    """Notes du serveur du reclasseur ; None s'il ne tourne pas (pas de socket, connexion refusée)."""
+    import socket
+
+    if not SOCKET_RECLASSEUR.is_socket():
+        return None
+    s = socket.socket(socket.AF_UNIX)
+    s.settimeout(DELAI_RECLASSE)
+    try:
+        s.connect(str(SOCKET_RECLASSEUR))
+    except OSError:
+        s.close()
+        return None
+    with s:
+        s.sendall((json.dumps({"q": question, "docs": docs}) + "\n").encode())
+        recu = b""
+        while not recu.endswith(b"\n"):
+            bloc = s.recv(65536)
+            if not bloc:
+                break
+            recu += bloc
+    notes = json.loads(recu)
+    if isinstance(notes, dict):
+        raise ValueError("le serveur a refusé la demande")
+    return notes
+
+
+def reclasser(question: str, resultats: list) -> list:
+    """Renote les K_RECLASSE premiers passages et les range par note (à note égale, l'ordre de mem).
+    En cas d'échec : un avis sur la sortie d'erreur et l'ordre reçu, inchangé."""
+    import shutil
+
+    tete, reste = resultats[:K_RECLASSE], resultats[K_RECLASSE:]
+    if len(tete) < 2:
+        return resultats
+    script, node = RECLASSEUR / "reclasser.mjs", node_pour_reclasser()
+    docs = [f"{r[0]} — {r[4]}\n{r[5]}"[:1500] for r in tete]
+    try:
+        notes = noter_par_serveur(question, docs)
+        if notes is None:
+            if not script.is_file() or not node:
+                raise OSError("reclasseur ou node absent")
+            cmd = [node, str(script)]
+            if shutil.which("unshare"):
+                cmd = ["unshare", "-rn", *cmd]  # aucun accès réseau, quoi que fasse la bibliothèque
+            sortie = subprocess.run(cmd, input=json.dumps({"q": question, "docs": docs}), capture_output=True,
+                                    text=True, timeout=DELAI_RECLASSE, cwd=RECLASSEUR, check=True).stdout
+            notes = json.loads(sortie)
+        if len(notes) != len(tete) or not all(isinstance(x, (int, float)) for x in notes):
+            raise ValueError("réponse inattendue")
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        print(f"mem : reclassement indisponible ({type(e).__name__}), classement par mots et sens", file=sys.stderr)
+        return resultats
+    ordre = sorted(range(len(tete)), key=lambda i: -notes[i])  # tri stable
+    return [tete[i] for i in ordre] + reste
+
+
+def proches(con, base: Path, question: str, archives, type_, depuis, auteur, journaux) -> list:
+    """Passages classés par le sens (cosinus avec la question) ; [] si pas de vecteurs ou pas d'Ollama."""
+    if not sens_actif() or not base_sens(base).exists():
+        return []
+    q = vecteurs([question], delai=10)
+    if not q:
+        return []
+    try:
+        import numpy as np
+    except ImportError:
+        return []
+
+    con.execute("ATTACH DATABASE ? AS c", (f"file:{base_sens(base)}?mode=ro",))
+    sql = ("SELECT p.fichier, p.ligne, p.date, p.type, p.titre, p.texte, c.v.v FROM passages p "
+           "JOIN sens s ON s.rowid = p.rowid JOIN c.v ON c.v.h = s.h WHERE 1")
+    args: list = []
+    if not archives:
+        sql += " AND p.type != 'archive'"
+    sql += " AND p.type = ?" if type_ else " AND p.type != 'index'"
+    if type_:
+        args.append(type_)
+    if depuis:
+        sql += " AND p.date >= ?"
+        args.append(depuis)
+    if auteur:
+        sql += " AND (p.auteur = '' OR p.auteur = ?)"
+        args.append(auteur)
+    lignes = con.execute(sql, args).fetchall()
+    if not lignes:
+        return []
+    m = np.frombuffer(b"".join(r[6] for r in lignes), dtype=np.float32).reshape(len(lignes), -1)
+    cos = m @ q[0]
+    ordre = np.argsort(-cos)[:100]
+    return [(*lignes[i][:6], -float(cos[i])) for i in ordre]
+
+
+def afficher(resultats):
+    if not resultats:
+        print("aucun résultat")
+        return
+    for fichier, ligne, date, type_, titre, texte, _ in resultats:
+        print(f"{fichier}:{ligne}  [{type_}] {date}  {titre}")
+        for l in texte.splitlines()[:6]:
+            print("    " + (l if len(l) <= 220 else l[:217] + "…"))
+        print()
+
+
+def voir(racine: Path, base: Path, cible: str):
+    fichier, _, ligne = cible.rpartition(":")
+    if not fichier or not ligne.isdigit():
+        raise SystemExit("mem : usage : mem voir <fichier>:<ligne>  (ex. project/note.md:12)")
+    assurer_index(racine, base)
+    con = sqlite3.connect(f"file:{base}?mode=ro", uri=True)
+    row = con.execute(
+        "SELECT texte FROM passages WHERE fichier = ? AND ligne <= ? ORDER BY ligne DESC LIMIT 1",
+        (fichier, int(ligne)),
+    ).fetchone()
+    con.close()
+    print(row[0] if row else "introuvable")
+
+
+def slug(titre: str) -> str:
+    import unicodedata
+
+    s = unicodedata.normalize("NFKD", titre).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z0-9]+", "-", s).strip("-")[:60] or "note"
+
+
+def ajouter(racine: Path, type_: str, titre: str, texte: str) -> Path:
+    titre = titre.strip()
+    if not titre or "\n" in titre or "\r" in titre:
+        raise SystemExit("mem : le titre tient sur une seule ligne, non vide")
+    for l in [titre, *texte.splitlines()]:
+        if motif_secret(l) or DEBUT_BLOC.search(l):
+            raise SystemExit(f"mem : refusé, une ligne ressemble à un secret ({motif_secret(l) or 'bloc de clé'})")
+    dossier = racine / type_
+    dossier.mkdir(parents=True, exist_ok=True)
+    chemin = dossier / f"{slug(titre)}.md"
+    auteur = os.environ.get("AGENT_NOM", "")
+    contenu = (f"---\nname: {slug(titre)}\ndescription: {titre}\nauteur: {auteur}\nmodified: {dt.date.today()}\n"
+               f"metadata:\n  type: {type_}\n---\n\n{texte.strip()}\n")
+    for essai in (chemin, dossier / f"{slug(titre)}-{dt.date.today():%Y%m%d}.md"):
+        try:
+            with open(essai, "x", encoding="utf-8") as f:  # « x » : jamais d'écrasement, même entre deux ajouts simultanés
+                f.write(contenu)
+            return essai
+        except FileExistsError:
+            continue
+    raise SystemExit(f"mem : {chemin} existe déjà (et sa variante datée)")
+
+
+def etat(racine: Path, base: Path):
+    assurer_index(racine, base)
+    con = sqlite3.connect(f"file:{base}?mode=ro", uri=True)
+    print(f"dossier : {racine}\nbase : {base}")
+    total = con.execute("SELECT count(*) FROM passages").fetchone()[0]
+    print(f"notes : {len(notes(racine))}  passages : {total}")
+    avec = con.execute("SELECT count(*) FROM sens").fetchone()[0]
+    print(f"sens ({SENS_MODELE} local) : {avec} passages avec vecteur" + ("" if sens_actif() else ", désactivé (MEM_SENS=0)"))
+    if sens_actif() and avec < total:
+        print(f"  sens incomplet ({total - avec} sans vecteur) : {raison_sens()} ; puis « mem indexer »")
+    for type_, nb in con.execute("SELECT type, count(*) FROM passages GROUP BY type ORDER BY 2 DESC"):
+        print(f"  {type_} : {nb}")
+    caches = [f for (f,) in con.execute("SELECT DISTINCT fichier FROM passages WHERE type = 'index' AND fichier != 'MEMORY.md'")]
+    if caches:
+        print(f"notes racines sans type (classées index, hors recherche par défaut ; ajouter « type: » ou --type index) : {', '.join(caches)}")
+    refus = con.execute("SELECT fichier, ligne, motif FROM refus ORDER BY fichier, ligne").fetchall()
+    print(f"lignes filtrées (secret probable : valeur masquée, ou ligne retirée) : {len(refus)}")
+    for fichier, ligne, motif in refus:
+        print(f"  {fichier}:{ligne}  {motif}")
+    con.close()
+
+
+def est_sous_suite(petite: list[str], grande: list[str]) -> bool:
+    it = iter(grande)
+    return all(any(x == y for y in it) for x in petite)
+
+
+def verifier_perte(avant: Path, apres: Path) -> int:
+    """Rien de perdu : chaque ligne d'avant, doublons compris, existe autant de fois après ; et l'ordre des
+    lignes de chaque note est conservé dans la note vivante suivie de ses archives (ou l'inverse)."""
+    def lire(p: Path) -> list[str]:
+        return [l.rstrip() for l in p.read_text(encoding="utf-8", errors="replace").splitlines() if l.strip()]
+
+    compte_apres = collections.Counter()
+    fichiers_apres = {str(p.relative_to(apres)): lire(p) for p in notes(apres)}
+    for lignes in fichiers_apres.values():
+        compte_apres.update(lignes)
+    compte_avant = collections.Counter()
+    problemes = []
+    for p in notes(avant):
+        rel = str(p.relative_to(avant))
+        lignes = lire(p)
+        compte_avant.update(lignes)
+        vivant = fichiers_apres.get(rel, [])
+        archives = [l for r, ls in sorted(fichiers_apres.items())
+                    if r.startswith("archive/") and Path(r).stem.startswith(p.stem) for l in ls]
+        if not (est_sous_suite(lignes, vivant + archives) or est_sous_suite(lignes, archives + vivant)
+                or any(est_sous_suite(lignes, ls) for r, ls in fichiers_apres.items() if Path(r).name == p.name)):
+            problemes.append(f"ordre ou contenu changé : {rel}")
+    manque = compte_avant - compte_apres
+    for ligne, nb in list(manque.items())[:50]:
+        problemes.append(f"perdue ×{nb} : {ligne[:120]}")
+    for x in problemes[:60]:
+        print(x)
+    print(f"lignes perdues : {sum(manque.values())} ; notes en désordre : {sum(x.startswith('ordre') for x in problemes)}")
+    return 1 if problemes else 0
+
+
+def bench(racine: Path, base: Path, fichier: Path, n: int = 10) -> int:
+    """Rejoue des questions de référence : rang de la première note attendue, puis top 1, top 3 et MRR.
+    On compare des notes, pas des lignes : une note qui grandit ne casse pas le jeu de questions."""
+    questions = []
+    for l in fichier.read_text(encoding="utf-8").splitlines():
+        if l.strip() and not l.startswith("#"):
+            q, _, attendues = l.partition("\t")
+            questions.append((q.strip(), {a.strip() for a in attendues.split(",") if a.strip()}))
+    if not questions:
+        raise SystemExit(f"mem : aucune question dans {fichier}")
+    absentes = sorted({a for _, att in questions for a in att if not (racine / a).is_file()})
+    for a in absentes:
+        print(f"note attendue introuvable : {a}")
+    rangs = []
+    for q, attendues in questions:
+        fichiers = [r[0] for r in chercher(racine, base, q, n)]
+        rang = next((i for i, f in enumerate(fichiers, start=1) if f in attendues), None)
+        rangs.append(rang)
+        print(f"{rang or '-':>2}  {q}" + ("" if rang and rang <= 3 else f"   (en tête : {fichiers[0] if fichiers else 'rien'})"))
+    nb = len(rangs)
+    top1 = sum(r == 1 for r in rangs)
+    top3 = sum(bool(r and r <= 3) for r in rangs)
+    mrr = sum(1 / r for r in rangs if r) / nb
+    print(f"\n{nb} questions : top 1 {top1}/{nb}, top 3 {top3}/{nb}, MRR {mrr:.2f}")
+    return 2 if absentes else 0  # 2 : jeu de questions à mettre à jour (le score, lui, est valable)
+
+
+def selftest() -> int:
+    """Lignes pièges du filtre de secrets, de l'index et des commandes, dans une mémoire jetable (sans Ollama).
+    Aucune valeur n'est affichée : seulement « ok » ou « ÉCHEC » et le nom du cas."""
+    import tempfile
+
+    echecs = []
+
+    def cas(nom: str, bon: bool):
+        print(("ok     " if bon else "ÉCHEC  ") + nom)
+        if not bon:
+            echecs.append(nom)
+
+    # Valeurs factices, assemblées pour qu'aucun outil ne les prenne pour de vraies clés.
+    sk = "sk-" + "Ab3" * 9
+    ghp = "ghp_" + "x9Y" * 9
+    a_masquer = [
+        "mot de passe : hunter2", "mdp = abcd", "cle api: abcd", "clé API : wxyz", "api key: abcd",
+        "jeton: abcde", "secret_key: abcd", "motdepasse: abcd", "auth_token = abcd1", "DB_PASSWORD: abcd",
+        "le mot de passe est hunter22", f"clé du routeur {sk}", f"jeton GitHub {ghp}",
+        '{"password": "abcdef12"}', "https://alice:abcd1234@exemple.fr/x", "Authorization: Bearer abcdefgh1234",
+        "OPENAI_API_KEY=Zq8xPw3LmN7vRt2YkB9c",
+        "le mot de passe est hunTer", "le mot de passe est 'hunter'", "le mot de passe est « hunter »",
+        "le mot de passe est `hunter`", "le mot de passe est hunter22!", "le token vaut \"abcd\"",
+    ]
+    for l in a_masquer:
+        texte, motif = masquer(l)
+        nom = l.replace(sk, "<sk-…>").replace(ghp, "<ghp_…>")
+        cas(f"masqué : {nom.split(':')[0].split('=')[0][:30].strip()} ({motif})", bool(motif))
+    a_garder = ["token_count: 1234", "le jeton est renouvelé chaque jour", "le mot de passe est dans le coffre",
+                "attention : le mot de passe est requis", "le mot de passe est changé", "le secret vaut d'être gardé",
+                "jeton d'horodatage valide jusqu'en 2027", "voir la clé publique ed25519 du relais",
+                "le mot de passe est obligatoire", "le mot de passe est « dans le coffre »",
+                "le mot de passe est Requis", "le secret vaut mieux que l'oubli"]
+    for l in a_garder:
+        cas(f"gardé : {l[:40]}", masquer(l) == (l, None))
+
+    cas("date : rappel 19/11 écrit le 12/11 reste à venir", date_du_passage("- 19/11 x", "2026-11-12") == "2026-11-19")
+    cas("date : 08/11 dans une note de mars = l'an passé", date_du_passage("- 08/11 x", "2026-03-10") == "2025-11-08")
+    cas("date : 31/02 ignorée", date_du_passage("- 31/02 x", "2026-03-10") is None)
+
+    global RECLASSEUR, SOCKET_RECLASSEUR
+    ancien, ancien_r, ancien_dossier = os.environ.get("MEM_SENS"), os.environ.get("MEM_RECLASSER"), RECLASSEUR
+    ancien_socket = SOCKET_RECLASSEUR
+    os.environ["MEM_SENS"] = os.environ["MEM_RECLASSER"] = "0"
+    try:
+        with tempfile.TemporaryDirectory(prefix="mem-selftest-") as tmp:
+            racine, base = Path(tmp) / "m", Path(tmp) / "m.db"
+            (racine / "project").mkdir(parents=True)
+            (racine / "dossier.md").mkdir()  # un dossier nommé *.md ne casse rien
+            (racine / "project" / "pieges.md").write_text(
+                "---\nname: pieges\ndescription: essai cle api: abcd\nauteur: TOKEN=Zq8xPw3LmN7vRt2YkB9c\n"
+                "metadata:\n  type: project\n---\n\nAvant le bloc.\n\n"
+                "    -----BEGIN RSA PRIVATE KEY-----\n    Proc-Type: 4,ENCRYPTED\n    DEK-Info: AES-128-CBC,0011\n"
+                "    abcd1234ef\n    -----END RSA PRIVATE KEY-----\n\nAprès le bloc, wireguard du relais.\n",
+                encoding="utf-8")
+            try:
+                indexer(racine, base)
+                cas("index : dossier nommé *.md ignoré", True)
+            except Exception as e:  # noqa: BLE001
+                cas(f"index : dossier nommé *.md ignoré ({type(e).__name__})", False)
+                return 1
+            con = sqlite3.connect(base)
+            tout = "\n".join(" ".join(map(str, r)) for r in con.execute("SELECT titre, auteur, texte FROM passages"))
+            con.close()
+            cas("index : corps d'un bloc de clé indenté absent", "abcd1234ef" not in tout)
+            cas("index : bloc de clé refermé (la suite est indexée)", "wireguard du relais" in tout)
+            cas("index : secret d'un champ d'en-tête absent", "Zq8xPw3LmN7vRt2YkB9c" not in tout)
+            cas("index : secret court de la description absent", "cle api: abcd" not in tout)
+            cas("chercher : plusieurs mots", any(r[0] == "project/pieges.md" for r in chercher(racine, base, "wireguard relais")))
+            try:
+                voir(racine, base, "project/pieges.md")
+                cas("voir sans :ligne refusé proprement", False)
+            except SystemExit:
+                cas("voir sans :ligne refusé proprement", True)
+            faits = [ajouter(racine, "project", "Note double", "un"), ajouter(racine, "project", "Note double", "deux")]
+            cas("ajouter : deux titres égaux, deux fichiers", len(set(faits)) == 2)
+            for nom, titre in (("ajouter : troisième titre égal refusé", "Note double"),
+                               ("ajouter : titre sur deux lignes refusé", "deux\nlignes"),
+                               ("ajouter : secret refusé", "mot de passe : hunter2")):
+                try:
+                    ajouter(racine, "project", titre, "x")
+                    cas(nom, False)
+                except SystemExit:
+                    cas(nom, True)
+            # Reclassement : un faux reclasseur (note = numéro du passage) et un reclasseur absent.
+            lignes = [(f"n{i}.md", 1, "", "project", f"t{i}", "texte", 0.0) for i in range(K_RECLASSE + 2)]
+            SOCKET_RECLASSEUR = Path(tmp) / "pas-de-serveur.sock"  # jamais le vrai service pendant le selftest
+            RECLASSEUR = Path(tmp) / "absent"
+            import contextlib
+            import io
+
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                cas("reclasser : reclasseur absent, ordre inchangé et avis", reclasser("q", lignes) == lignes
+                    and "reclassement indisponible" in err.getvalue())
+            if node_pour_reclasser():
+                RECLASSEUR = Path(tmp) / "faux"
+                RECLASSEUR.mkdir()
+                (RECLASSEUR / "reclasser.mjs").write_text(
+                    'import fs from "node:fs"; const {docs} = JSON.parse(fs.readFileSync(0, "utf8"));'
+                    " process.stdout.write(JSON.stringify(docs.map((_, i) => i)));")
+                sortie = reclasser("q", lignes)
+                cas("reclasser : le passage le mieux noté remonte en tête",
+                    sortie[0] == lignes[K_RECLASSE - 1] and sorted(sortie) == sorted(lignes)
+                    and sortie[K_RECLASSE:] == lignes[K_RECLASSE:])
+            else:
+                print("(sauté : reclasser avec un faux reclasseur, node absent)")
+    finally:
+        RECLASSEUR, SOCKET_RECLASSEUR = ancien_dossier, ancien_socket
+        for cle, val in (("MEM_SENS", ancien), ("MEM_RECLASSER", ancien_r)):
+            if val is None:
+                os.environ.pop(cle, None)
+            else:
+                os.environ[cle] = val
+    print(f"\n{'aucun échec' if not echecs else str(len(echecs)) + ' échec(s)'}")
+    return 1 if echecs else 0
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="mem", description=__doc__.splitlines()[0])
+    ap.add_argument("--dossier", type=Path, help="dossier mémoire (sinon détecté, voir mem --help)")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    c = sub.add_parser("chercher")
+    c.add_argument("mots", nargs="+")
+    c.add_argument("--n", type=int, default=5)
+    c.add_argument("--type")
+    c.add_argument("--depuis")
+    c.add_argument("--archives", action="store_true", help="chercher aussi dans archive/ d'emblée")
+    c.add_argument("--tous", action="store_true", help="notes de tous les auteurs, et les dossiers de ~/.config/mem/dossiers")
+    c.add_argument("--vite", action="store_true", help="sans reclassement par le modèle local (0,3 s au lieu de ~8 s)")
+    v = sub.add_parser("voir")
+    v.add_argument("cible")
+    a = sub.add_parser("ajouter")
+    a.add_argument("--type", required=True, choices=["user", "feedback", "project", "reference"])
+    a.add_argument("titre")
+    sub.add_parser("indexer")
+    sub.add_parser("etat")
+    sub.add_parser("selftest")
+    b = sub.add_parser("bench")
+    b.add_argument("questions", type=Path)
+    b.add_argument("--n", type=int, default=10)
+    p = sub.add_parser("verifier-perte")
+    p.add_argument("avant", type=Path)
+    p.add_argument("apres", type=Path)
+    args = ap.parse_args(argv)
+
+    if args.cmd == "selftest":
+        return selftest()
+    if args.cmd == "verifier-perte":
+        return verifier_perte(args.avant, args.apres)
+    racine = args.dossier or dossier_par_defaut()
+    if racine is None or not racine.expanduser().is_dir():
+        print(f"mem : aucun dossier mémoire trouvé depuis {Path.cwd()} ; donner --dossier ou MEM_DIR", file=sys.stderr)
+        return 2
+    racine = racine.expanduser()
+    base = base_par_defaut(racine)
+    if args.cmd == "chercher":
+        args.mots = " ".join(args.mots)
+        auteur = None if args.tous else (os.environ.get("AGENT_NOM") or None)
+        print(f"(mémoire : {racine})")
+        afficher(chercher(racine, base, args.mots, args.n, args.type, args.depuis, args.archives, auteur,
+                          reclasse=not args.vite))
+        if args.tous:
+            liste = Path.home() / ".config" / "mem" / "dossiers"
+            for autre in ([l.strip() for l in liste.read_text().splitlines() if l.strip()] if liste.exists() else []):
+                autre = Path(autre).expanduser()
+                if autre.is_dir() and autre.resolve() != racine.resolve():
+                    print(f"── {autre}")
+                    afficher(chercher(autre, base_par_defaut(autre), args.mots, args.n, args.type, args.depuis, args.archives,
+                                      reclasse=not args.vite))
+    elif args.cmd == "voir":
+        voir(racine, base, args.cible)
+    elif args.cmd == "ajouter":
+        print(ajouter(racine, args.type, args.titre, sys.stdin.read()))
+    elif args.cmd == "indexer":
+        total, refus = indexer(racine, base)
+        print(f"{total} passages indexés, {refus} lignes refusées")
+    elif args.cmd == "etat":
+        etat(racine, base)
+    elif args.cmd == "bench":
+        return bench(racine, base, args.questions, args.n)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

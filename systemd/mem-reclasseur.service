@@ -1,0 +1,19 @@
+# Reclasseur de mem : garde Qwen3-Reranker-4B chargé et répond sur un socket Unix 0600 ($XDG_RUNTIME_DIR/mem-reclasseur.sock),
+# sans accès réseau (unshare -rn) quand le système le permet. Arrêté, mem charge le modèle à chaque recherche (plus lent) ;
+# rien ne casse. Modèle écrit par reclasseur/installer.sh --service (@NODE@, @DEST@, @UNSHARE@ remplacés).
+# mem's reranker: keeps the model loaded, answers on a 0600 Unix socket, no network access when unshare is allowed.
+[Unit]
+Description=Reclasseur de mem (Qwen3-Reranker-4B gardé chargé, socket Unix)
+
+[Service]
+Type=simple
+WorkingDirectory=@DEST@
+ExecStart=@UNSHARE@@NODE@ serveur.mjs %t/mem-reclasseur.sock
+Restart=on-failure
+RestartSec=15
+Nice=5
+# Charge aussi bge-m3 dans Ollama pour de bon (keep_alive -1) ; ignoré si Ollama ne répond pas.
+ExecStartPost=-/usr/bin/curl -s -o /dev/null -m 120 --noproxy 127.0.0.1 http://127.0.0.1:11434/api/embed -d "{\"model\":\"bge-m3\",\"input\":\"x\",\"keep_alive\":-1}"
+
+[Install]
+WantedBy=default.target
