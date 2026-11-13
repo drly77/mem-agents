@@ -12,7 +12,8 @@ ExecStart=@UNSHARE@@NODE@ serveur.mjs %t/mem-reclasseur.sock
 Restart=on-failure
 RestartSec=15
 Nice=5
-# Charge aussi bge-m3 dans Ollama pour de bon (keep_alive -1) ; ignoré si Ollama ne répond pas.
+# Charge aussi bge-m3 dans Ollama pour de bon (keep_alive -1, ~1,2 Go de mémoire) ; ignoré si Ollama ne répond pas.
+# MEM_SENS_GARDER=0 ne s'applique pas ici : supprimer cette ligne pour laisser Ollama le décharger.
 ExecStartPost=-/usr/bin/curl -s -o /dev/null -m 120 --noproxy 127.0.0.1 http://127.0.0.1:11434/api/embed -d "{\"model\":\"bge-m3\",\"input\":\"x\",\"keep_alive\":-1}"
 
 [Install]

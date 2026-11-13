@@ -12,7 +12,8 @@ it falls back to `grep`, and misses anything phrased with different words.
 - **by words**: SQLite FTS5 (BM25), accent-insensitive, titles and descriptions weighted higher;
 - **by meaning** (optional): bge-m3 embeddings computed by a local Ollama;
 - **with reranking** (optional): the top 10 passages are rescored by Qwen3-Reranker-4B
-  (llama.cpp through node-llama-cpp), with no network access.
+  (llama.cpp through node-llama-cpp), with no network calls; where the system allows it, it also runs
+  locked out of the network (`unshare -rn`, see below).
 
 The notes stay the only source of truth: `mem` only keeps an index, rebuilt whenever a note changes.
 No text leaves the machine.
@@ -115,7 +116,9 @@ The suggested cycle, with the files in `integration/` (written in French; transl
 
 `mem` recognises these notes ("POINT DE REPRISE"): older ones rank below lasting rules, unless the
 question asks for the "latest" state. Several agents on one project:
-`mem point --note project/point-<agent>.md --archive archive/point-<agent>.md --auteur <agent>`.
+`mem point --note project/point-<agent>.md --archive archive/point-<agent>.md --auteur <agent>`,
+or `MEM_POINT_NOTE` and `MEM_POINT_ARCHIVE` in each agent's environment (the hook reads
+`MEM_POINT_NOTE` too).
 
 Going further (not included): a `Stop` hook can watch the context size and ask the agent to run
 `/avant-clear` past a threshold, before a session gets expensive.
@@ -135,10 +138,10 @@ memory of 182 notes:
 Quality, on a **private** benchmark of 200 questions written by another agent from that memory
 (paraphrases, situations, past states). MRR: mean of 1/rank of the right note (1 = always first).
 
-| | MRR, 200-question set | MRR, 50-question held-out set |
+| | 200-question set | 50-question set, also used to choose the reranker |
 |---|---|---|
-| words + meaning | 0.65 | 0.69 |
-| words + meaning + reranking | 0.74 | 0.78 |
+| words + meaning | MRR 0.64 (114/200 ranked first) | MRR 0.68 (31/50 ranked first) |
+| words + meaning + reranking | MRR 0.74 (139/200 ranked first) | MRR 0.75 (35/50 ranked first) |
 
 Limits of these figures: a single corpus, in French, from a single project; the reranker was chosen
 on these sets. Measure on your own questions with `mem bench` (format in `exemples/questions.tsv`)
@@ -163,7 +166,11 @@ visible. The only reliable rule: do not write secrets into agent memory.
 | `MEM_SENS_GARDER=0` | let Ollama unload bge-m3 after 5 minutes |
 | `MEM_RECLASSER=0` | no reranking (same as `--vite`) |
 | `MEM_RECLASSEUR` | reranker directory |
-| `MEM_SYNONYMES` | extra synonym groups (default `~/.config/mem/synonymes.txt`) |
+| `MEM_SYNONYMES` | extra synonym groups (default `$XDG_CONFIG_HOME/mem/synonymes.txt`, or `~/.config/…`) |
+| `MEM_RECLASSEUR_SOCKET` | reranking service socket (default `$XDG_RUNTIME_DIR/mem-reclasseur.sock`; never `/tmp`) |
+| `MEM_PROJETS` | roots of per-project memories, separated by ":" (default `~/.claude/projects` then `~/.openclaude/projects`) |
+| `MEM_POINT_NOTE`, `MEM_POINT_ARCHIVE` | handover note and its archive (`project/point-de-reprise.md`, `archive/point-de-reprise.md`) |
+| `AGENT_NOM` | agent name: `mem ajouter` records it as author, and `mem chercher` only shows that agent's notes and notes without an author (`--tous` for all) |
 
 Project-specific synonyms: one group per line, words separated by commas.
 ```
@@ -173,6 +180,9 @@ container, vm, proxmox
 
 The built-in synonyms, stop words and date formats are French; English notes are searched by words and
 by meaning, but benefit less from those helpers.
+
+A question asking for the "latest", "current" or "recent" state (« dernier », « actuel », « récent ») is neither
+searched by meaning nor reranked: dates matter more than closeness of meaning there, and `mem` puts the most recent passages first.
 
 Recognised conventions: the YAML front matter of Claude Code notes (`name`, `description`,
 `metadata.type`), dates at the start of an entry (`- 08/11 …`, `## 2026-11-08`), and handover notes

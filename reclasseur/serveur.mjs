@@ -8,7 +8,9 @@ import path from "node:path";
 import {fileURLToPath} from "node:url";
 
 const ici = path.dirname(fileURLToPath(import.meta.url));
-const chemin = process.argv[2] || path.join(process.env.XDG_RUNTIME_DIR || "/tmp", "mem-reclasseur.sock");
+// Jamais de repli dans /tmp (un autre utilisateur pourrait y préparer le chemin) : argument ou XDG_RUNTIME_DIR.
+const chemin = process.argv[2] || (process.env.XDG_RUNTIME_DIR && path.join(process.env.XDG_RUNTIME_DIR, "mem-reclasseur.sock"));
+if (!chemin) { console.error("serveur.mjs : donner le chemin du socket, ou définir XDG_RUNTIME_DIR"); process.exit(2); }
 const llama = await getLlama({build: "never", logLevel: LlamaLogLevel.error});
 const model = await llama.loadModel({modelPath: path.join(ici, "qwen3-reranker-4b-q4_k_m.gguf")});
 const ctx = await model.createRankingContext({contextSize: 2048});

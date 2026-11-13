@@ -183,8 +183,11 @@ AGE_JOURNAL, FACTEUR_JOURNAL = 14, 0.6  # passage d'une note à POINT DE REPRISE
 RECLASSEUR = Path(os.environ.get("MEM_RECLASSEUR", Path.home() / ".local" / "share" / "mem" / "reclasseur"))
 K_RECLASSE, DELAI_RECLASSE = 10, 60  # passages renotés ; secondes
 # Serveur qui garde le modèle chargé (serveur.mjs) : essayé d'abord ; absent, mem lance reclasser.mjs.
-SOCKET_RECLASSEUR = Path(os.environ.get("MEM_RECLASSEUR_SOCKET",
-                                        Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "mem-reclasseur.sock"))
+# Jamais de repli dans /tmp : un autre utilisateur pourrait y préparer le chemin. Sans XDG_RUNTIME_DIR ni
+# MEM_RECLASSEUR_SOCKET, pas de serveur : mem charge le modèle lui-même.
+_SOCKET = os.environ.get("MEM_RECLASSEUR_SOCKET") or (
+    os.path.join(os.environ["XDG_RUNTIME_DIR"], "mem-reclasseur.sock") if os.environ.get("XDG_RUNTIME_DIR") else "")
+SOCKET_RECLASSEUR = Path(_SOCKET) if _SOCKET else None
 RECENT = {"dernier", "dernière", "derniers", "dernières", "actuel", "actuelle", "actuels", "récent", "récente"}
 
 DATE_ISO = re.compile(r"\b(20\d\d)-(\d\d)-(\d\d)\b")
@@ -233,11 +236,15 @@ def dossier_par_defaut() -> Path | None:
     return None  # jamais de mémoire d'un autre projet par défaut : MEM_DIR ou --dossier
 
 
+def _donnees(dossier: Path, suffixe: str) -> Path:
+    nom = dossier.parent.name if dossier.name == "memory" else dossier.name
+    return Path.home() / ".local" / "share" / "mem" / f"{nom.strip('-') or 'racine'}{suffixe}"
+
+
 def base_par_defaut(dossier: Path) -> Path:
     if os.environ.get("MEM_DB"):
         return Path(os.environ["MEM_DB"]).expanduser()
-    nom = dossier.parent.name if dossier.name == "memory" else dossier.name
-    return Path.home() / ".local" / "share" / "mem" / f"{nom.strip('-') or 'racine'}.db"
+    return _donnees(dossier, ".db")
 
 
 def motif_secret(ligne: str) -> str | None:
@@ -456,6 +463,7 @@ def calculer_sens(con: sqlite3.Connection, base: Path) -> None:
         return
     lignes = con.execute("SELECT rowid, titre, texte FROM passages").fetchall()
     cles = {r[0]: hashlib.sha256(f"{SENS_MODELE}\0{r[1]}\0{r[2]}".encode()).hexdigest() for r in lignes}
+    os.close(os.open(base_sens(base), os.O_CREAT | os.O_WRONLY, 0o600))  # créé 0600 d'emblée, jamais avec l'umask
     cache = sqlite3.connect(base_sens(base))
     try:
         os.chmod(base_sens(base), 0o600)
@@ -701,7 +709,7 @@ def noter_par_serveur(question: str, docs: list) -> list | None:
     """Notes du serveur du reclasseur ; None s'il ne tourne pas (pas de socket, connexion refusée)."""
     import socket
 
-    if not SOCKET_RECLASSEUR.is_socket():
+    if SOCKET_RECLASSEUR is None or not SOCKET_RECLASSEUR.is_socket():
         return None
     s = socket.socket(socket.AF_UNIX)
     s.settimeout(DELAI_RECLASSE)
@@ -904,11 +912,12 @@ def verifier_perte(avant: Path, apres: Path) -> int:
 
 
 
-POINT_NOTE, POINT_ARCHIVE = "project/point-de-reprise.md", "archive/point-de-reprise.md"
+POINT_NOTE = os.environ.get("MEM_POINT_NOTE") or "project/point-de-reprise.md"
+POINT_ARCHIVE = os.environ.get("MEM_POINT_ARCHIVE") or "archive/point-de-reprise.md"
 
 
 def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: str = POINT_ARCHIVE,
-          auteur: str = "") -> int:
+          auteur: str = "", fichier_verrou: Path | None = None) -> int:
     """Remplace le point de reprise : l'ancien (tout ce qui suit l'en-tête, à partir du premier « ## ») part mot
     pour mot à la fin de l'archive, la note ne garde que l'en-tête et le point neuf. verifier-perte contrôle
     qu'aucune ligne n'a disparu ; sinon rien n'est changé. Commit si le dossier mémoire est un dépôt git.
@@ -932,7 +941,12 @@ def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: st
         i = next((i for i, l in enumerate(lignes) if l.startswith("## ")), len(lignes))
         return "".join(lignes[:i]), "".join(lignes[i:])
 
-    with open(racine / ".mem-point.verrou", "w") as verrou:
+    # Hors du dossier mémoire : rien de non suivi dans son git. Un verrou par dossier, partagé par tous ses agents.
+    if fichier_verrou is None:  # à côté de la base de mem (MEM_DB, sinon ~/.local/share/mem/<projet>…)
+        fichier_verrou = (Path(os.environ["MEM_DB"]).expanduser().with_suffix(".point.verrou") if os.environ.get("MEM_DB")
+                          else _donnees(racine.resolve(), ".point.verrou"))
+    fichier_verrou.parent.mkdir(parents=True, exist_ok=True)
+    with open(fichier_verrou, "w") as verrou:
         fcntl.flock(verrou, fcntl.LOCK_EX)
         avant_note = note.read_text(encoding="utf-8") if note.exists() else (
             f"---\nname: {Path(note_rel).stem}\ndescription: Dernier point de reprise (écrit avant /clear ou /compact)"
@@ -963,8 +977,9 @@ def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: st
         commit = ""
         if (racine / ".git").exists():
             subprocess.run(["git", "-C", str(racine), "add", str(note), str(archive)], check=False)
+            # « -- note archive » : le commit n'emporte que ces deux fichiers, jamais ce qui était déjà indexé.
             r = subprocess.run(["git", "-C", str(racine), "commit", "-q", "-m",
-                                f"{auteur or 'mem point'} : point de reprise archivé, point neuf"],
+                                f"{auteur or 'mem point'} : point de reprise archivé, point neuf", "--", str(note), str(archive)],
                                capture_output=True, text=True)
             if r.returncode == 0:
                 commit = subprocess.run(["git", "-C", str(racine), "rev-parse", "--short", "HEAD"],
@@ -1093,18 +1108,42 @@ def selftest() -> int:
             un.write_text("## POINT DE REPRISE 01/01 10h00\n- prod = abc123\n- prod = abc123\n", encoding="utf-8")
             deux.write_text("## POINT DE REPRISE 02/01 11h00\n- prod = def456\n", encoding="utf-8")
             with contextlib.redirect_stdout(io.StringIO()):
-                ok1, ok2 = point(racine, str(un)), point(racine, str(deux))
+                ok1, ok2 = point(racine, str(un), fichier_verrou=Path(tmp) / "v"), point(racine, str(deux), fichier_verrou=Path(tmp) / "v")
             note_p, arch_p = (racine / POINT_NOTE).read_text(), (racine / POINT_ARCHIVE).read_text()
             cas("point : créé puis remplacé", ok1 == 0 and ok2 == 0 and note_p.startswith("---\nname: point-de-reprise")
                 and "def456" in note_p and "abc123" not in note_p)
             cas("point : ancien point archivé mot pour mot (doublons compris)",
                 arch_p.count("- prod = abc123") == 2 and "## POINT DE REPRISE 01/01 10h00" in arch_p)
+            import shutil
+
+            if shutil.which("git"):
+                ident = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                         "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+                g = lambda *a: subprocess.run(["git", "-C", str(racine), *a], capture_output=True, text=True, env=ident)  # noqa: E731
+                g("init", "-q"), g("add", "-A"), g("commit", "-qm", "init")
+                (racine / "project" / "autre.md").write_text("en cours\n", encoding="utf-8")
+                g("add", "project/autre.md")
+                trois = Path(tmp) / "p2b.md"
+                trois.write_text("## POINT DE REPRISE 02/01 12h00\n- prod = ghi789\n", encoding="utf-8")
+                ancien_env = os.environ.copy()
+                os.environ.update(ident)
+                try:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        point(racine, str(trois), fichier_verrou=Path(tmp) / "v")
+                finally:
+                    os.environ.clear(), os.environ.update(ancien_env)
+                dernier = g("show", "--name-only", "--format=", "HEAD").stdout.split()
+                cas("point : le commit n'emporte que la note et l'archive",
+                    sorted(dernier) == sorted([POINT_ARCHIVE, POINT_NOTE]) and "project/autre.md" in g("diff", "--cached", "--name-only").stdout)
+                note_p = (racine / POINT_NOTE).read_text()
+            else:
+                print("(sauté : commit limité de mem point, git absent)")
             mauvais = Path(tmp) / "p3.md"
             for nom, contenu in (("point : sans titre « POINT DE REPRISE » refusé", "## Notes\nx\n"),
                                  ("point : secret refusé, rien d'écrit", "## POINT DE REPRISE 03/01\nmot de passe : hunter2\n")):
                 mauvais.write_text(contenu, encoding="utf-8")
                 with contextlib.redirect_stderr(io.StringIO()):
-                    cas(nom, point(racine, str(mauvais)) == 2 and (racine / POINT_NOTE).read_text() == note_p)
+                    cas(nom, point(racine, str(mauvais), fichier_verrou=Path(tmp) / "v") == 2 and (racine / POINT_NOTE).read_text() == note_p)
             # Reclassement : un faux reclasseur (note = numéro du passage) et un reclasseur absent.
             lignes = [(f"n{i}.md", 1, "", "project", f"t{i}", "texte", 0.0) for i in range(K_RECLASSE + 2)]
             SOCKET_RECLASSEUR = Path(tmp) / "pas-de-serveur.sock"  # jamais le vrai service pendant le selftest

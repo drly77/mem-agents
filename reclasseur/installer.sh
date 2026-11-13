@@ -13,6 +13,8 @@ SHA256="941f7d1d1524251c026a797b803ac9575545c5d7aa19b26e0e49661d7720af49"
 
 NODE="$(command -v node || true)"
 [ -n "$NODE" ] || { echo "node introuvable (Node.js 20 ou plus) / node not found" >&2; exit 1; }
+"$NODE" -e 'process.exit(+process.versions.node.split(".")[0] >= 20 ? 0 : 1)' \
+  || { echo "Node.js 20 ou plus requis (trouvé : $("$NODE" --version)) / Node.js 20+ required" >&2; exit 1; }
 command -v npm >/dev/null || { echo "npm introuvable / npm not found" >&2; exit 1; }
 
 mkdir -p "$DEST"

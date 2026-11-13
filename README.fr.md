@@ -12,7 +12,8 @@ il cherche avec `grep`, et rate tout ce qui est dit avec d'autres mots.
 - **par mots** : SQLite FTS5 (BM25), accents ignorés, titres et descriptions pesés plus lourd ;
 - **par le sens** (facultatif) : vecteurs bge-m3 calculés par un Ollama local ;
 - **avec reclassement** (facultatif) : les 10 premiers passages sont renotés par
-  Qwen3-Reranker-4B (llama.cpp par node-llama-cpp), sans accès réseau.
+  Qwen3-Reranker-4B (llama.cpp par node-llama-cpp), sans aucun appel réseau ; quand le système le
+  permet, il tourne en plus enfermé sans réseau (`unshare -rn`, voir plus bas).
 
 Les notes restent la seule source : `mem` n'en tient qu'un index, refait dès qu'une note change.
 Aucun texte ne quitte la machine.
@@ -116,7 +117,9 @@ Le cycle proposé, avec les fichiers du dossier `integration/` :
 
 `mem` reconnaît ces points (« POINT DE REPRISE ») : les plus anciens passent derrière les règles
 durables, sauf si la question demande le « dernier » état. Plusieurs agents sur un même projet :
-`mem point --note project/point-<agent>.md --archive archive/point-<agent>.md --auteur <agent>`.
+`mem point --note project/point-<agent>.md --archive archive/point-<agent>.md --auteur <agent>`,
+ou `MEM_POINT_NOTE` et `MEM_POINT_ARCHIVE` dans l'environnement de chaque agent (le hook lit aussi
+`MEM_POINT_NOTE`).
 
 Pour aller plus loin (non fourni) : un hook `Stop` peut surveiller la taille du contexte et demander
 `/avant-clear` à l'agent au-delà d'un seuil, avant qu'une session devienne chère.
@@ -136,10 +139,10 @@ réelle de 182 notes :
 Qualité, sur un banc **privé** de 200 questions écrites par un autre agent à partir de cette mémoire
 (paraphrases, situations, états passés). MRR : moyenne de 1/rang de la bonne note (1 = toujours en tête).
 
-| | MRR, banc de 200 | MRR, banc de 50 tenu à l'écart |
+| | banc de 200 | banc de 50, servi aussi au choix du reclasseur |
 |---|---|---|
-| mots + sens | 0,65 | 0,69 |
-| mots + sens + reclassement | 0,74 | 0,78 |
+| mots + sens | MRR 0,64 (114/200 en tête) | MRR 0,68 (31/50 en tête) |
+| mots + sens + reclassement | MRR 0,74 (139/200 en tête) | MRR 0,75 (35/50 en tête) |
 
 Limites de ces chiffres : un seul corpus, en français, d'un seul projet ; le choix du reclasseur a été
 fait sur ce banc et sur un second de 50 questions. Mesurez sur vos propres questions avec `mem bench`
@@ -164,13 +167,20 @@ est requis » et reste visible. La seule règle sûre : ne pas écrire de secret
 | `MEM_SENS_GARDER=0` | laisser Ollama décharger bge-m3 au bout de 5 minutes |
 | `MEM_RECLASSER=0` | sans reclassement (comme `--vite`) |
 | `MEM_RECLASSEUR` | dossier du reclasseur |
-| `MEM_SYNONYMES` | groupes de synonymes en plus (sinon `~/.config/mem/synonymes.txt`) |
+| `MEM_SYNONYMES` | groupes de synonymes en plus (sinon `$XDG_CONFIG_HOME/mem/synonymes.txt`, ou `~/.config/…`) |
+| `MEM_RECLASSEUR_SOCKET` | socket du service de reclassement (sinon `$XDG_RUNTIME_DIR/mem-reclasseur.sock` ; jamais `/tmp`) |
+| `MEM_PROJETS` | racines des mémoires par projet, séparées par « : » (sinon `~/.claude/projects` puis `~/.openclaude/projects`) |
+| `MEM_POINT_NOTE`, `MEM_POINT_ARCHIVE` | note du point de reprise et son archive (`project/point-de-reprise.md`, `archive/point-de-reprise.md`) |
+| `AGENT_NOM` | nom de l'agent : `mem ajouter` le note comme auteur, et `mem chercher` ne montre que ses notes et celles sans auteur (`--tous` pour toutes) |
 
 Synonymes propres à un projet : un groupe par ligne, mots séparés par des virgules.
 ```
 relecteur, relecture, revue-de-code
 conteneur, vm, proxmox
 ```
+
+Une question qui demande le « dernier », l'« actuel » ou le « récent » n'est ni cherchée par le sens ni reclassée :
+la date y compte plus que la proximité de sens, et `mem` met alors les passages les plus récents en tête.
 
 Conventions reconnues : l'en-tête YAML des notes Claude Code (`name`, `description`, `metadata.type`),
 les dates en tête d'entrée (`- 08/11 …`, `## 2026-11-08`), et les notes de reprise (« POINT DE
