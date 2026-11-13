@@ -26,6 +26,7 @@ mem voir project/deploiement.md:12           # show a passage in context
 mem ajouter --type feedback "title" < text   # add a note
 mem etat                                     # notes, passages, lines withheld as secrets
 mem bench questions.tsv                      # top 1, top 3, MRR on your own questions
+mem point point.md                           # new handover note before /clear or /compact
 mem selftest
 ```
 
@@ -50,6 +51,40 @@ mem selftest
    It installs node-llama-cpp 3.20.0 (exact version), downloads the model from Hugging Face (2.5 GB),
    checks its SHA-256 and, with `--service`, enables a systemd user unit that keeps the model loaded.
    Without the service, `mem` loads the model on every search (slower).
+
+## Claude Code integration: memory, /compact and /clear
+
+A search tool only helps if the agent remembers to use it, and memory only helps if it survives the
+end of the conversation. Claude Code offers two ways to empty the context:
+
+- **/compact** replaces the conversation with a summary written by the model. The session goes on,
+  but the summary loses details (commit ids, paths, the reason behind a decision).
+- **/clear** starts from an empty conversation. Only files remain: CLAUDE.md, MEMORY.md and the notes.
+  It is cheaper (every turn rereads the whole context) and cleaner, provided the agent wrote down what
+  it needs to know beforehand.
+
+The suggested cycle, with the files in `integration/` (written in French; translate them freely):
+
+1. **Tell the agent when to search**: add `integration/CLAUDE.md.extrait` to your CLAUDE.md
+   (global `~/.claude/CLAUDE.md` or the project's).
+2. **Before /clear or /compact**: copy `integration/avant-clear.md` into `~/.claude/commands/`,
+   then type `/avant-clear`. The agent writes a handover note ("POINT DE REPRISE": verified state,
+   work in progress, decisions, next step, "do this first") and files it with `mem point`: the
+   previous note goes **verbatim** into `archive/point-de-reprise.md`, a check makes sure no line was
+   lost (otherwise nothing is written), and the memory directory is committed if it is a git repo.
+3. **Type /clear** (or /compact).
+4. **On restart, the hook puts the agent back on track**: install `integration/mem-reprise` on your
+   PATH (`install -m 755 integration/mem-reprise ~/.local/bin/`) and merge
+   `integration/settings.json.extrait` into `~/.claude/settings.json`. Every session that starts after
+   a /clear or /compact gets its text in context: the agent rereads its handover note, does its
+   "do this first" section, and searches with `mem` before stating any past state.
+
+`mem` recognises these notes ("POINT DE REPRISE"): older ones rank below lasting rules, unless the
+question asks for the "latest" state. Several agents on one project:
+`mem point --note project/point-<agent>.md --archive archive/point-<agent>.md`.
+
+Going further (not included): a `Stop` hook can watch the context size and ask the agent to run
+`/avant-clear` past a threshold, before a session gets expensive.
 
 ## Cost and benefit
 

@@ -13,6 +13,7 @@ comptée dans `mem etat`, sans son contenu.
     mem indexer | mem etat
     mem selftest   (lignes pièges du filtre de secrets et des commandes, dans une mémoire jetable)
     mem verifier-perte AVANT APRES
+    mem point FICHIER|-   (point de reprise neuf avant /clear ou /compact ; l'ancien part mot pour mot en archive)
     mem bench questions.tsv [--n 10]   (top 1, top 3, MRR ; une ligne « question<TAB>note,note »)
 
 Dossier : --dossier, sinon $MEM_DIR, sinon la mémoire Claude Code du dossier
@@ -902,6 +903,73 @@ def verifier_perte(avant: Path, apres: Path) -> int:
     return 1 if problemes else 0
 
 
+
+POINT_NOTE, POINT_ARCHIVE = "project/point-de-reprise.md", "archive/point-de-reprise.md"
+
+
+def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: str = POINT_ARCHIVE) -> int:
+    """Remplace le point de reprise : l'ancien (tout ce qui suit l'en-tête, à partir du premier « ## ») part mot
+    pour mot à la fin de l'archive, la note ne garde que l'en-tête et le point neuf. verifier-perte contrôle
+    qu'aucune ligne n'a disparu ; sinon rien n'est écrit. Commit si le dossier mémoire est un dépôt git."""
+    import contextlib
+    import io
+
+    texte = (sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8")).strip() + "\n"
+    if not texte.startswith("## POINT DE REPRISE"):
+        print("mem point : le point doit commencer par « ## POINT DE REPRISE »", file=sys.stderr)
+        return 2
+    for i, l in enumerate(texte.splitlines(), 1):
+        if motif_secret(l) or DEBUT_BLOC.search(l):
+            print(f"mem point : refusé, la ligne {i} ressemble à un secret ({motif_secret(l) or 'bloc de clé'})",
+                  file=sys.stderr)
+            return 2
+    note, archive = racine / note_rel, racine / archive_rel
+
+    def couper(contenu: str) -> tuple[str, str]:
+        lignes = contenu.splitlines(keepends=True)
+        i = next((i for i, l in enumerate(lignes) if l.startswith("## ")), len(lignes))
+        return "".join(lignes[:i]), "".join(lignes[i:])
+
+    with open(racine / ".mem-point.verrou", "w") as verrou:
+        fcntl.flock(verrou, fcntl.LOCK_EX)
+        avant_note = note.read_text(encoding="utf-8") if note.exists() else (
+            f"---\nname: {Path(note_rel).stem}\ndescription: Dernier point de reprise (écrit avant /clear ou /compact)"
+            f"\nmetadata:\n  type: project\n---\n")
+        avant_archive = archive.read_text(encoding="utf-8") if archive.exists() else ""
+        tete, corps = couper(avant_note)
+        nouvelle_archive = avant_archive
+        if corps.strip():
+            nouvelle_archive = (nouvelle_archive or "# Points de reprise archivés\n").rstrip("\n") + "\n\n" + corps
+        nouvelle_note = tete.rstrip("\n") + "\n\n" + texte
+        with tempfile.TemporaryDirectory(prefix="mem-point-") as tmp:
+            avant, apres = Path(tmp, "avant"), Path(tmp, "apres")
+            for d, contenus in ((avant, (avant_note, avant_archive)), (apres, (nouvelle_note, nouvelle_archive))):
+                for rel, contenu in zip((note_rel, archive_rel), contenus):
+                    (d / rel).parent.mkdir(parents=True, exist_ok=True)
+                    (d / rel).write_text(contenu, encoding="utf-8")
+            sortie = io.StringIO()
+            with contextlib.redirect_stdout(sortie):
+                perte = verifier_perte(avant, apres)
+            if perte:
+                print("mem point : verifier-perte refuse, rien n'est écrit\n" + sortie.getvalue(), file=sys.stderr)
+                return 1
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        note.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_text(nouvelle_archive, encoding="utf-8")
+        note.write_text(nouvelle_note, encoding="utf-8")
+        commit = ""
+        if (racine / ".git").exists():
+            subprocess.run(["git", "-C", str(racine), "add", str(note), str(archive)], check=False)
+            r = subprocess.run(["git", "-C", str(racine), "commit", "-q", "-m", "mem point : point de reprise neuf"],
+                               capture_output=True, text=True)
+            if r.returncode == 0:
+                commit = subprocess.run(["git", "-C", str(racine), "rev-parse", "--short", "HEAD"],
+                                        capture_output=True, text=True).stdout.strip()
+    ancien = f"ancien point archivé dans {archive_rel} ({len(corps)} octets)" if corps.strip() else "premier point"
+    print(f"point de reprise : {note_rel} ({len(nouvelle_note)} octets) ; {ancien} ; aucune ligne perdue"
+          + (f" ; commit {commit}" if commit else ""))
+    return 0
+
 def bench(racine: Path, base: Path, fichier: Path, n: int = 10) -> int:
     """Rejoue des questions de référence : rang de la première note attendue, puis top 1, top 3 et MRR.
     On compare des notes, pas des lignes : une note qui grandit ne casse pas le jeu de questions."""
@@ -1013,13 +1081,30 @@ def selftest() -> int:
                     cas(nom, False)
                 except SystemExit:
                     cas(nom, True)
+            # Point de reprise : création, remplacement (ancien point archivé mot pour mot), refus.
+            import contextlib
+            import io
+
+            un, deux = Path(tmp) / "p1.md", Path(tmp) / "p2.md"
+            un.write_text("## POINT DE REPRISE 01/01 10h00\n- prod = abc123\n- prod = abc123\n", encoding="utf-8")
+            deux.write_text("## POINT DE REPRISE 02/01 11h00\n- prod = def456\n", encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                ok1, ok2 = point(racine, str(un)), point(racine, str(deux))
+            note_p, arch_p = (racine / POINT_NOTE).read_text(), (racine / POINT_ARCHIVE).read_text()
+            cas("point : créé puis remplacé", ok1 == 0 and ok2 == 0 and note_p.startswith("---\nname: point-de-reprise")
+                and "def456" in note_p and "abc123" not in note_p)
+            cas("point : ancien point archivé mot pour mot (doublons compris)",
+                arch_p.count("- prod = abc123") == 2 and "## POINT DE REPRISE 01/01 10h00" in arch_p)
+            mauvais = Path(tmp) / "p3.md"
+            for nom, contenu in (("point : sans titre « POINT DE REPRISE » refusé", "## Notes\nx\n"),
+                                 ("point : secret refusé, rien d'écrit", "## POINT DE REPRISE 03/01\nmot de passe : hunter2\n")):
+                mauvais.write_text(contenu, encoding="utf-8")
+                with contextlib.redirect_stderr(io.StringIO()):
+                    cas(nom, point(racine, str(mauvais)) == 2 and (racine / POINT_NOTE).read_text() == note_p)
             # Reclassement : un faux reclasseur (note = numéro du passage) et un reclasseur absent.
             lignes = [(f"n{i}.md", 1, "", "project", f"t{i}", "texte", 0.0) for i in range(K_RECLASSE + 2)]
             SOCKET_RECLASSEUR = Path(tmp) / "pas-de-serveur.sock"  # jamais le vrai service pendant le selftest
             RECLASSEUR = Path(tmp) / "absent"
-            import contextlib
-            import io
-
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
                 cas("reclasser : reclasseur absent, ordre inchangé et avis", reclasser("q", lignes) == lignes
@@ -1070,6 +1155,10 @@ def main(argv=None) -> int:
     b = sub.add_parser("bench")
     b.add_argument("questions", type=Path)
     b.add_argument("--n", type=int, default=10)
+    pt = sub.add_parser("point", help="point de reprise neuf (avant /clear ou /compact)")
+    pt.add_argument("fichier", help="fichier du point neuf, ou « - » pour l'entrée standard")
+    pt.add_argument("--note", default=POINT_NOTE, help=f"note du point, relative au dossier ({POINT_NOTE})")
+    pt.add_argument("--archive", default=POINT_ARCHIVE, help=f"archive des anciens points ({POINT_ARCHIVE})")
     p = sub.add_parser("verifier-perte")
     p.add_argument("avant", type=Path)
     p.add_argument("apres", type=Path)
@@ -1108,6 +1197,8 @@ def main(argv=None) -> int:
         print(f"{total} passages indexés, {refus} lignes refusées")
     elif args.cmd == "etat":
         etat(racine, base)
+    elif args.cmd == "point":
+        return point(racine, args.fichier, args.note, args.archive)
     elif args.cmd == "bench":
         return bench(racine, base, args.questions, args.n)
     return 0

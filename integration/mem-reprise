@@ -1,0 +1,6 @@
+#!/bin/sh
+# Hook SessionStart de Claude Code (matcher « clear|compact ») : ce qu'il écrit est ajouté au contexte de la session.
+# SessionStart hook (matcher "clear|compact"): its output is added to the session context.
+cat <<'FIN'
+Reprise après un /clear ou un /compact. Lis ton point de reprise, project/point-de-reprise.md dans le dossier mémoire (« mem etat » donne le chemin), et fais sa section « À FAIRE EN PREMIER ». Avant d'affirmer un état passé (commit, déploiement, décision, accord), cherche d'abord : mem chercher "mots-clés", puis vérifie en direct.
+FIN

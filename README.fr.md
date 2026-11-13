@@ -24,6 +24,7 @@ mem voir project/deploiement.md:12
 mem ajouter --type feedback "titre" < texte
 mem etat                                     # notes, passages, lignes écartées comme secrets
 mem bench questions.tsv                      # top 1, top 3, MRR sur vos propres questions
+mem point point.md                           # point de reprise neuf avant /clear ou /compact
 mem selftest
 ```
 
@@ -48,6 +49,41 @@ mem selftest
    Le script installe node-llama-cpp 3.20.0 (version exacte), télécharge le modèle depuis Hugging Face
    (2,5 Go), vérifie son empreinte SHA-256 et, avec `--service`, active une unité systemd utilisateur
    qui garde le modèle chargé. Sans le service, `mem` charge le modèle à chaque recherche (plus lent).
+
+## Intégration à Claude Code : la mémoire, /compact et /clear
+
+Un outil de recherche ne sert que si l'agent pense à s'en servir, et la mémoire n'est utile que si
+elle survit à la fin de la conversation. Claude Code offre deux façons de la vider :
+
+- **/compact** remplace la conversation par un résumé écrit par le modèle. La session continue, mais
+  le résumé perd des détails (identifiants de commits, chemins, raisons d'une décision).
+- **/clear** repart d'une conversation vide. Il ne reste que les fichiers : CLAUDE.md, MEMORY.md et
+  les notes. C'est plus économique (chaque échange relit tout le contexte) et plus net, à condition
+  que l'agent ait écrit ce qu'il doit savoir avant.
+
+Le cycle proposé, avec les fichiers du dossier `integration/` :
+
+1. **Dire à l'agent quand chercher** : ajouter `integration/CLAUDE.md.extrait` à votre CLAUDE.md
+   (global `~/.claude/CLAUDE.md` ou celui du projet).
+2. **Avant un /clear ou un /compact** : copier `integration/avant-clear.md` dans `~/.claude/commands/`,
+   puis taper `/avant-clear`. L'agent écrit un point de reprise (état vérifié, travaux en cours,
+   décisions, prochaine étape, « À FAIRE EN PREMIER ») et le range avec `mem point` :
+   l'ancien point part **mot pour mot** dans `archive/point-de-reprise.md`, un contrôle vérifie
+   qu'aucune ligne n'a disparu (sinon rien n'est écrit), et le dossier mémoire est commité s'il est
+   un dépôt git.
+3. **Taper /clear** (ou /compact).
+4. **Au redémarrage, le hook relance l'agent** : installer `integration/mem-reprise` dans le PATH
+   (`install -m 755 integration/mem-reprise ~/.local/bin/`) et ajouter le contenu de
+   `integration/settings.json.extrait` à `~/.claude/settings.json`. À chaque session qui démarre
+   après un /clear ou un /compact, son texte est ajouté au contexte : l'agent relit son point,
+   fait sa section « À FAIRE EN PREMIER », et cherche avec `mem` avant d'affirmer un état passé.
+
+`mem` reconnaît ces points (« POINT DE REPRISE ») : les plus anciens passent derrière les règles
+durables, sauf si la question demande le « dernier » état. Plusieurs agents sur un même projet :
+`mem point --note project/point-<agent>.md --archive archive/point-<agent>.md`.
+
+Pour aller plus loin (non fourni) : un hook `Stop` peut surveiller la taille du contexte et demander
+`/avant-clear` à l'agent au-delà d'un seuil, avant qu'une session devienne chère.
 
 ## Ce que ça coûte, ce que ça rapporte
 

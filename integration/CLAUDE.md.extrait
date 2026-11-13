@@ -1,0 +1,4 @@
+## Mémoire (mem)
+- Avant d'affirmer un état passé (commit, déploiement, décision, accord) ou de conclure qu'un outil ou un accès manque : `mem chercher "mots-clés"`, puis vérifier en direct. `--vite` quand la rapidité compte plus que l'ordre.
+- Nouvelle note durable : `mem ajouter --type feedback|project|reference|user "titre" < texte`, puis une ligne dans MEMORY.md seulement si c'est une règle. Jamais de secret dans la mémoire.
+- Avant un /clear ou un /compact : `/avant-clear` (point de reprise neuf par `mem point`).

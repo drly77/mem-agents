@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "clear|compact",
+        "hooks": [{ "type": "command", "command": "mem-reprise" }]
+      }
+    ]
+  }
+}
