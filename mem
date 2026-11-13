@@ -153,7 +153,9 @@ def _synonymes_perso() -> list[set[str]]:
     defaut = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "mem" / "synonymes.txt"
     try:
         lignes = Path(os.environ.get("MEM_SYNONYMES") or defaut).read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, ValueError) as e:  # ValueError : fichier pas en UTF-8 ; mem doit marcher quand même
+        if not isinstance(e, FileNotFoundError):
+            print(f"mem : synonymes ignorés ({type(e).__name__})", file=sys.stderr)
         return []
     groupes = ({m.strip().lower() for m in l.split(",") if m.strip()} for l in lignes if not l.lstrip().startswith("#"))
     return [g for g in groupes if len(g) > 1]
@@ -472,12 +474,16 @@ def calculer_sens(con: sqlite3.Connection, base: Path) -> None:
         a_faire = [r for r in lignes if cles[r[0]] not in connus]
         for i in range(0, len(a_faire), SENS_LOT):
             lot = a_faire[i:i + SENS_LOT]
+            if sys.stderr.isatty() and len(a_faire) > SENS_LOT:
+                print(f"\rmem : sens, {i}/{len(a_faire)} passages…", end="", file=sys.stderr, flush=True)
             vs = vecteurs([f"{t}\n{x}"[:2000] for _, t, x in lot])
             if vs is None:
                 break  # Ollama absent : les passages restants seront faits à la prochaine réindexation
             cache.executemany("INSERT OR REPLACE INTO v VALUES (?, ?)",
                               [(cles[r[0]], v.tobytes()) for r, v in zip(lot, vs)])
             cache.commit()
+        if sys.stderr.isatty() and len(a_faire) > SENS_LOT:
+            print("\r\033[K", end="", file=sys.stderr, flush=True)
         presents = {h for (h,) in cache.execute("SELECT h FROM v")}
         cache.executemany("DELETE FROM v WHERE h = ?", [(h,) for h in presents - set(cles.values())])
         cache.commit()
@@ -515,7 +521,11 @@ def indexer(racine: Path, base: Path, si_perime: bool = False) -> tuple[int, int
     """Reconstruit l'index sous verrou, dans un fichier temporaire unique, puis le met en place d'un coup."""
     base.parent.mkdir(parents=True, exist_ok=True)
     with open(base.with_suffix(".verrou"), "w") as verrou:
-        fcntl.flock(verrou, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(verrou, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("mem : index en cours de réfection par un autre agent, attente…", file=sys.stderr, flush=True)
+            fcntl.flock(verrou, fcntl.LOCK_EX)
         if si_perime and empreinte_de_la_base(base) == empreinte(racine):
             return 0, 0  # refait entre-temps par un autre agent
         fd, tmp = tempfile.mkstemp(dir=base.parent, prefix=base.stem + ".", suffix=".tmp")
@@ -860,7 +870,9 @@ def etat(racine: Path, base: Path):
     total = con.execute("SELECT count(*) FROM passages").fetchone()[0]
     print(f"notes : {len(notes(racine))}  passages : {total}")
     avec = con.execute("SELECT count(*) FROM sens").fetchone()[0]
-    print(f"sens ({SENS_MODELE} local) : {avec} passages avec vecteur" + ("" if sens_actif() else ", désactivé (MEM_SENS=0)"))
+    cause = ("" if sens_actif() else ", désactivé (MEM_SENS=0)" if os.environ.get("MEM_SENS", "1") == "0"
+             else f", désactivé (MEM_SENS_URL vise {urllib.parse.urlparse(SENS_URL).hostname}, pas cette machine)")
+    print(f"sens ({SENS_MODELE} local) : {avec} passages avec vecteur{cause}")
     if sens_actif() and avec < total:
         print(f"  sens incomplet ({total - avec} sans vecteur) : {raison_sens()} ; puis « mem indexer »")
     for type_, nb in con.execute("SELECT type, count(*) FROM passages GROUP BY type ORDER BY 2 DESC"):
@@ -976,8 +988,25 @@ def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: st
                 return 1
         archive.parent.mkdir(parents=True, exist_ok=True)
         note.parent.mkdir(parents=True, exist_ok=True)
-        archive.write_text(nouvelle_archive, encoding="utf-8")
-        note.write_text(nouvelle_note, encoding="utf-8")
+        # Les deux contenus sont écrits à côté, puis mis en place par os.replace : un arrêt ne laisse jamais un
+        # fichier à moitié écrit. Seule fenêtre restante : entre les deux replace (archive à jour, note ancienne :
+        # l'ancien point en double, rien de perdu).
+        tmps = []
+        try:
+            for cible, contenu in ((archive, nouvelle_archive), (note, nouvelle_note)):
+                fd, tmp = tempfile.mkstemp(dir=cible.parent, prefix="." + cible.name + ".", suffix=".tmp")
+                tmps.append(tmp)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(contenu)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.chmod(tmp, cible.stat().st_mode & 0o777 if cible.exists() else 0o644)
+            os.replace(tmps[0], archive)
+            os.replace(tmps[1], note)
+        finally:
+            for tmp in tmps:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
         commit = ""
         if (racine / ".git").exists():
             subprocess.run(["git", "-C", str(racine), "add", str(note), str(archive)], check=False)
@@ -1032,6 +1061,32 @@ def selftest() -> int:
         print(("ok     " if bon else "ÉCHEC  ") + nom)
         if not bon:
             echecs.append(nom)
+
+    # Entrée de la ligne de commande : --dossier avant ou après la sous-commande ; synonymes.txt hors UTF-8.
+    import contextlib
+    import io
+    with tempfile.TemporaryDirectory(prefix="mem-test-") as tmp:
+        latin1 = Path(tmp) / "syn.txt"
+        latin1.write_bytes("caf\xe9, th\xe9\n".encode("latin-1"))
+        ancien_syn = os.environ.get("MEM_SYNONYMES")
+        os.environ["MEM_SYNONYMES"] = str(latin1)
+        try:
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                cas("synonymes.txt hors UTF-8 : ignoré avec un avis, pas de plantage",
+                    _synonymes_perso() == [] and "synonymes ignorés" in err.getvalue())
+        finally:
+            os.environ.pop("MEM_SYNONYMES") if ancien_syn is None else os.environ.update(MEM_SYNONYMES=ancien_syn)
+        vide = Path(tmp) / "vide"
+        vide.mkdir()
+        for args in (["--dossier", str(vide), "etat"], ["etat", "--dossier", str(vide)]):
+            with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
+                ancien_db = os.environ.get("MEM_DB")
+                os.environ["MEM_DB"] = str(Path(tmp) / "base.sqlite")
+                try:
+                    main(args)
+                finally:
+                    os.environ.pop("MEM_DB") if ancien_db is None else os.environ.update(MEM_DB=ancien_db)
+            cas(f"mem {' '.join(args[:1])} … : --dossier pris en compte", f"dossier : {vide}" in out.getvalue())
 
     # Valeurs factices, assemblées pour qu'aucun outil ne les prenne pour de vraies clés.
     sk = "sk-" + "Ab3" * 9
@@ -1187,7 +1242,9 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="mem", description=__doc__.splitlines()[0])
     ap.add_argument("--dossier", type=Path, help="dossier mémoire (sinon détecté, voir mem --help)")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    c = sub.add_parser("chercher")
+    commun = argparse.ArgumentParser(add_help=False)  # « mem chercher --dossier D … » marche aussi
+    commun.add_argument("--dossier", type=Path, default=argparse.SUPPRESS, help="dossier mémoire")
+    c = sub.add_parser("chercher", parents=[commun])
     c.add_argument("mots", nargs="+")
     c.add_argument("--n", type=int, default=5)
     c.add_argument("--type")
@@ -1195,23 +1252,23 @@ def main(argv=None) -> int:
     c.add_argument("--archives", action="store_true", help="chercher aussi dans archive/ d'emblée")
     c.add_argument("--tous", action="store_true", help="notes de tous les auteurs, et les dossiers de ~/.config/mem/dossiers")
     c.add_argument("--vite", action="store_true", help="sans reclassement par le modèle local (0,3 s au lieu de ~8 s)")
-    v = sub.add_parser("voir")
+    v = sub.add_parser("voir", parents=[commun])
     v.add_argument("cible")
-    a = sub.add_parser("ajouter")
+    a = sub.add_parser("ajouter", parents=[commun])
     a.add_argument("--type", required=True, choices=["user", "feedback", "project", "reference"])
     a.add_argument("titre")
-    sub.add_parser("indexer")
-    sub.add_parser("etat")
-    sub.add_parser("selftest")
-    b = sub.add_parser("bench")
+    sub.add_parser("indexer", parents=[commun])
+    sub.add_parser("etat", parents=[commun])
+    sub.add_parser("selftest", parents=[commun])
+    b = sub.add_parser("bench", parents=[commun])
     b.add_argument("questions", type=Path)
     b.add_argument("--n", type=int, default=10)
-    pt = sub.add_parser("point", help="point de reprise neuf (avant /clear ou /compact)")
+    pt = sub.add_parser("point", parents=[commun], help="point de reprise neuf (avant /clear ou /compact)")
     pt.add_argument("fichier", help="fichier du point neuf, ou « - » pour l'entrée standard")
     pt.add_argument("--note", default=POINT_NOTE, help=f"note du point, relative au dossier ({POINT_NOTE})")
     pt.add_argument("--archive", default=POINT_ARCHIVE, help=f"archive des anciens points ({POINT_ARCHIVE})")
     pt.add_argument("--auteur", default="", help="nom de l'agent, repris dans le commit et l'archive")
-    p = sub.add_parser("verifier-perte")
+    p = sub.add_parser("verifier-perte", parents=[commun])
     p.add_argument("avant", type=Path)
     p.add_argument("apres", type=Path)
     args = ap.parse_args(argv)
@@ -1229,12 +1286,19 @@ def main(argv=None) -> int:
     if args.cmd == "chercher":
         args.mots = " ".join(args.mots)
         auteur = None if args.tous else (os.environ.get("AGENT_NOM") or None)
-        print(f"(mémoire : {racine})")
+        print(f"(mémoire : {racine})", file=sys.stderr)
         afficher(chercher(racine, base, args.mots, args.n, args.type, args.depuis, args.archives, auteur,
                           reclasse=not args.vite))
         if args.tous:
             liste = Path.home() / ".config" / "mem" / "dossiers"
-            for autre in ([l.strip() for l in liste.read_text().splitlines() if l.strip()] if liste.exists() else []):
+            try:
+                autres = [l.strip() for l in liste.read_text(encoding="utf-8").splitlines() if l.strip()]
+            except FileNotFoundError:
+                autres = []
+            except (OSError, ValueError) as e:
+                print(f"mem : {liste} illisible ({type(e).__name__}), --tous limité à ce dossier", file=sys.stderr)
+                autres = []
+            for autre in autres:
                 autre = Path(autre).expanduser()
                 if autre.is_dir() and autre.resolve() != racine.resolve():
                     print(f"── {autre}")
