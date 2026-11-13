@@ -925,7 +925,11 @@ def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: st
     import contextlib
     import io
 
-    texte = (sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8")).strip() + "\n"
+    try:
+        texte = (sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8")).strip() + "\n"
+    except (OSError, UnicodeDecodeError) as e:
+        print(f"mem point : lecture impossible de {source} ({e.strerror or e})", file=sys.stderr)
+        return 2
     if not texte.startswith("## POINT DE REPRISE"):
         print("mem point : le point doit commencer par « ## POINT DE REPRISE »", file=sys.stderr)
         return 2
@@ -1019,6 +1023,7 @@ def bench(racine: Path, base: Path, fichier: Path, n: int = 10) -> int:
 def selftest() -> int:
     """Lignes pièges du filtre de secrets, de l'index et des commandes, dans une mémoire jetable (sans Ollama).
     Aucune valeur n'est affichée : seulement « ok » ou « ÉCHEC » et le nom du cas."""
+    FAUX = "Zq8xPw3LmN" + "7vRt2YkB9c"  # valeur piège coupée : aucun scanner de secrets ne la prend pour vraie
     import tempfile
 
     echecs = []
@@ -1036,7 +1041,7 @@ def selftest() -> int:
         "jeton: abcde", "secret_key: abcd", "motdepasse: abcd", "auth_token = abcd1", "DB_PASSWORD: abcd",
         "le mot de passe est hunter22", f"clé du routeur {sk}", f"jeton GitHub {ghp}",
         '{"password": "abcdef12"}', "https://alice:abcd1234@exemple.fr/x", "Authorization: Bearer abcdefgh1234",
-        "OPENAI_API_KEY=Zq8xPw3LmN7vRt2YkB9c",
+        "OPENAI_API_KEY=" + FAUX,
         "le mot de passe est hunTer", "le mot de passe est 'hunter'", "le mot de passe est « hunter »",
         "le mot de passe est `hunter`", "le mot de passe est hunter22!", "le token vaut \"abcd\"",
     ]
@@ -1066,10 +1071,10 @@ def selftest() -> int:
             (racine / "project").mkdir(parents=True)
             (racine / "dossier.md").mkdir()  # un dossier nommé *.md ne casse rien
             (racine / "project" / "pieges.md").write_text(
-                "---\nname: pieges\ndescription: essai cle api: abcd\nauteur: TOKEN=Zq8xPw3LmN7vRt2YkB9c\n"
+                "---\nname: pieges\ndescription: essai cle api: abcd\nauteur: TOKEN=" + FAUX + "\n"
                 "metadata:\n  type: project\n---\n\nAvant le bloc.\n\n"
-                "    -----BEGIN RSA PRIVATE KEY-----\n    Proc-Type: 4,ENCRYPTED\n    DEK-Info: AES-128-CBC,0011\n"
-                "    abcd1234ef\n    -----END RSA PRIVATE KEY-----\n\nAprès le bloc, wireguard du relais.\n",
+                "    -----BEGIN RSA " + "PRIVATE KEY-----\n    Proc-Type: 4,ENCRYPTED\n    DEK-Info: AES-128-CBC,0011\n"
+                "    abcd1234ef\n    -----END RSA " + "PRIVATE KEY-----\n\nAprès le bloc, wireguard du relais.\n",
                 encoding="utf-8")
             try:
                 indexer(racine, base)
@@ -1082,7 +1087,7 @@ def selftest() -> int:
             con.close()
             cas("index : corps d'un bloc de clé indenté absent", "abcd1234ef" not in tout)
             cas("index : bloc de clé refermé (la suite est indexée)", "wireguard du relais" in tout)
-            cas("index : secret d'un champ d'en-tête absent", "Zq8xPw3LmN7vRt2YkB9c" not in tout)
+            cas("index : secret d'un champ d'en-tête absent", FAUX not in tout)
             cas("index : secret court de la description absent", "cle api: abcd" not in tout)
             cas("chercher : plusieurs mots", any(r[0] == "project/pieges.md" for r in chercher(racine, base, "wireguard relais")))
             try:
@@ -1139,6 +1144,9 @@ def selftest() -> int:
             else:
                 print("(sauté : commit limité de mem point, git absent)")
             mauvais = Path(tmp) / "p3.md"
+            with contextlib.redirect_stderr(io.StringIO()):
+                cas("point : fichier absent, code 2 sans trace", point(racine, str(Path(tmp) / "absent.md"),
+                                                                     fichier_verrou=Path(tmp) / "v") == 2)
             for nom, contenu in (("point : sans titre « POINT DE REPRISE » refusé", "## Notes\nx\n"),
                                  ("point : secret refusé, rien d'écrit", "## POINT DE REPRISE 03/01\nmot de passe : hunter2\n")):
                 mauvais.write_text(contenu, encoding="utf-8")
