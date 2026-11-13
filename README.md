@@ -37,6 +37,16 @@ mem selftest
 whole context**: the files loaded at startup (CLAUDE.md, MEMORY.md) and the entire conversation.
 The bigger the context, the more each turn costs, in money or in quota.
 
+The context is everything the model rereads before answering, on every turn:
+
+1. **Claude Code itself**: its instructions and tool descriptions, about 40,000 tokens for us
+   (depending on the version and enabled tools), there from the first turn;
+2. **the startup files**: CLAUDE.md (global and project) and MEMORY.md;
+3. **the conversation**: your messages, the answers, the files read, the command outputs. It grows on
+   every turn, and ends up weighing the most.
+
+Prompt caching makes this rereading cheaper, not free: the bigger the context, the more a turn costs.
+
 On our project (several agents, weeks of work), three things had grown:
 
 - **CLAUDE.md**: 23 KB of rules, reread at every start and after every compaction;
@@ -63,6 +73,13 @@ What we did:
    the agent searches for it when needed instead of keeping everything in context. A search costs a
    few seconds and a few hundred tokens of results; keeping those notes in context cost their full
    size on every turn.
+
+![The context window before and after: ≈ 55k then ≈ 44k tokens at startup; at worst 500k then 250k reread every turn](docs/context.en.svg)
+
+Measured on our sessions: on the first turn, ≈ 55,000 tokens before the startup files were cut, ≈ 44,000
+after (the `usage` field of Claude Code transcripts). The share of CLAUDE.md and MEMORY.md is estimated
+from their size; the rest is Claude Code's own. At worst, a turn used to reread ~500,000 tokens; it now
+rereads ~250,000 at most.
 
 The handover note (`mem point`) is what makes /clear safe: the agent restarts from an empty context,
 but with a state it wrote itself, and `mem` for everything else.

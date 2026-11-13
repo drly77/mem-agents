@@ -35,6 +35,17 @@ mem selftest
 relit tout le contexte** : les fichiers chargés au démarrage (CLAUDE.md, MEMORY.md) et toute la
 conversation. Plus le contexte est gros, plus chaque tour coûte cher, en argent ou en quota.
 
+Le contexte, c'est tout ce que le modèle relit avant de répondre, à chaque tour :
+
+1. **Claude Code lui-même** : ses instructions et la description de ses outils, environ 40 000 tokens
+   chez nous (selon la version et les outils activés), présents dès le premier tour ;
+2. **les fichiers de démarrage** : CLAUDE.md (global et du projet) et MEMORY.md ;
+3. **la conversation** : vos messages, les réponses, les fichiers lus, les sorties de commandes. Elle
+   grossit à chaque tour, et c'est elle qui finit par peser le plus.
+
+Le cache des prompts rend cette relecture moins chère, pas gratuite : un tour coûte d'autant plus que
+le contexte est gros.
+
 Sur notre projet (plusieurs agents, des semaines de travail), trois choses avaient grossi :
 
 - **CLAUDE.md** : 23 Ko de règles, relus à chaque démarrage et après chaque compact ;
@@ -63,6 +74,13 @@ Ce que nous avons fait :
    dans les notes, et l'agent le cherche quand il en a besoin, au lieu de tout garder en contexte.
    Une recherche coûte quelques secondes et quelques centaines de tokens de résultats ; garder
    ces notes en contexte coûtait leur taille entière à chaque tour.
+
+![La fenêtre de contexte avant et après : au démarrage ≈ 55 k puis ≈ 44 k tokens ; au pire 500 k puis 250 k relus à chaque tour](docs/contexte.fr.svg)
+
+Mesuré sur nos sessions : au premier tour, ≈ 55 000 tokens avant la réduction des fichiers, ≈ 44 000
+après (champ `usage` des transcriptions de Claude Code). La part de CLAUDE.md et MEMORY.md est
+estimée d'après leur taille, le reste revient à Claude Code. Au pire, un tour relisait ~500 000 tokens ;
+il en relit au plus ~250 000.
 
 Le point de reprise (`mem point`) est ce qui rend le /clear sûr : l'agent repart d'un contexte
 vide, mais avec un état écrit par lui-même, et `mem` pour le reste.
