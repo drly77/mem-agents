@@ -857,7 +857,7 @@ def afficher(resultats):
         print()
 
 
-def voir(racine: Path, base: Path, cible: str):
+def voir(racine: Path, base: Path, cible: str) -> int:
     fichier, _, ligne = cible.rpartition(":")
     if not fichier or not ligne.isdigit():
         raise SystemExit("mem : usage : mem voir <fichier>:<ligne>  (ex. project/note.md:12)")
@@ -868,7 +868,11 @@ def voir(racine: Path, base: Path, cible: str):
         (fichier, int(ligne)),
     ).fetchone()
     con.close()
-    print(row[0] if row else "introuvable")
+    if not row:
+        print(f"mem : {cible} introuvable dans l'index", file=sys.stderr)
+        return 1
+    print(row[0])
+    return 0
 
 
 def slug(titre: str) -> str:
@@ -1064,7 +1068,12 @@ def bench(racine: Path, base: Path, fichier: Path, n: int = 10) -> int:
     """Rejoue des questions de référence : rang de la première note attendue, puis top 1, top 3 et MRR.
     On compare des notes, pas des lignes : une note qui grandit ne casse pas le jeu de questions."""
     questions = []
-    for l in fichier.read_text(encoding="utf-8").splitlines():
+    try:
+        texte = fichier.read_text(encoding="utf-8")
+    except (OSError, ValueError) as e:  # absent, illisible, pas en UTF-8 : message et code 2, comme mem point
+        print(f"mem bench : lecture impossible de {fichier} ({getattr(e, 'strerror', None) or e})", file=sys.stderr)
+        return 2
+    for l in texte.splitlines():
         if l.strip() and not l.startswith("#"):
             q, _, attendues = l.partition("\t")
             questions.append((q.strip(), {a.strip() for a in attendues.split(",") if a.strip()}))
@@ -1201,6 +1210,13 @@ def selftest() -> int:
                 cas("voir sans :ligne refusé proprement", False)
             except SystemExit:
                 cas("voir sans :ligne refusé proprement", True)
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                cas("voir : passage absent = code 1 et avis sur stderr",
+                    voir(racine, base, "project/absent.md:3") == 1 and "introuvable" in err.getvalue())
+                cas("bench : fichier absent = code 2 sans trace", bench(racine, base, Path(tmp) / "absent.tsv") == 2)
+                latin = Path(tmp) / "q.tsv"
+                latin.write_bytes("caf\xe9\tproject/pieges.md\n".encode("latin-1"))
+                cas("bench : questions hors UTF-8 = code 2 sans trace", bench(racine, base, latin) == 2)
             faits = [ajouter(racine, "project", "Note double", "un"), ajouter(racine, "project", "Note double", "deux")]
             cas("ajouter : deux titres égaux, deux fichiers", len(set(faits)) == 2)
             for nom, titre in (("ajouter : troisième titre égal refusé", "Note double"),
@@ -1361,11 +1377,11 @@ def main(argv=None) -> int:
             for autre in autres:
                 autre = Path(autre).expanduser()
                 if autre.is_dir() and autre.resolve() != racine.resolve():
-                    print(f"── {autre}")
+                    print(f"── {autre}", file=sys.stderr)  # stdout : les résultats seulement
                     afficher(chercher(autre, base_par_defaut(autre), args.mots, args.n, args.type, args.depuis, args.archives,
                                       reclasse=not args.vite, dans=dans))
     elif args.cmd == "voir":
-        voir(racine, base, args.cible)
+        return voir(racine, base, args.cible)
     elif args.cmd == "ajouter":
         print(ajouter(racine, args.type, args.titre, sys.stdin.read()))
     elif args.cmd == "indexer":
