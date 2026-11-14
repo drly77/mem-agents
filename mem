@@ -11,6 +11,7 @@ comptée dans `mem etat`, sans son contenu.
     mem voir fichier:ligne
     mem ajouter --type project "titre" < texte
     mem indexer | mem etat
+    mem doublons [--seuil 0.88] [--dans feedback/]   (notes qui se répètent ou se contredisent)
     mem selftest   (lignes pièges du filtre de secrets et des commandes, dans une mémoire jetable)
     mem verifier-perte AVANT APRES
     mem point FICHIER|-   (point de reprise neuf avant /clear ou /compact ; l'ancien part mot pour mot en archive)
@@ -980,6 +981,83 @@ def verifier_perte(avant: Path, apres: Path) -> int:
 
 
 
+DOUBLONS_SEUIL = 0.88  # cosinus ; réglé sur la mémoire du laptop (0,85 : encore juste ; 0,88 : presque aucun faux)
+DOUBLONS_MIN = 40      # caractères : en dessous, un titre seul (« ## Production ») ressemble à tout
+
+
+def paires_proches(fichiers: list[str], m, seuil: float) -> dict:
+    """{(fichier_a, fichier_b): [(cosinus, i, j), …] du plus proche au moins proche} : passages i et j de deux
+    notes différentes dont le cosinus atteint le seuil. m : vecteurs normés, une ligne par passage.
+    Par blocs de lignes : la mémoire reste bornée même pour des dizaines de milliers de passages."""
+    import numpy as np
+
+    f = np.asarray(fichiers)
+    paires = collections.defaultdict(list)
+    for debut in range(0, len(fichiers), 1024):
+        bloc = m[debut:debut + 1024] @ m.T
+        for k, j in zip(*np.nonzero(bloc >= seuil), strict=True):
+            i = debut + int(k)
+            if i < j and f[i] != f[j]:
+                paires[tuple(sorted((fichiers[i], fichiers[j])))].append((float(bloc[k, j]), i, int(j)))
+    return {c: sorted(v, reverse=True) for c, v in paires.items()}
+
+
+def doublons(racine: Path, base: Path, seuil: float = DOUBLONS_SEUIL, n: int = 20, dans: str | None = None) -> int:
+    """Notes qui se répètent (ou se contredisent) : paires de passages très proches par le sens, dans deux notes
+    différentes, regroupées par paire de notes. Hors archives (elles reprennent les notes par construction) et
+    MEMORY.md, à la racine comme dans un sous-dossier (il résume les notes). Ne change rien : c'est à l'agent de fusionner ou de trancher."""
+    assurer_index(racine, base)
+    if not sens_actif():
+        print("mem doublons : il faut la recherche par le sens (MEM_SENS, Ollama local)", file=sys.stderr)
+        return 2
+    try:
+        import numpy as np
+    except ImportError:
+        print("mem doublons : numpy absent", file=sys.stderr)
+        return 2
+    if not base_sens(base).exists():
+        print(f"mem doublons : aucun vecteur ({raison_sens()})", file=sys.stderr)
+        return 2
+    con = sqlite3.connect(f"file:{base}?mode=ro", uri=True)
+    try:
+        con.execute("ATTACH DATABASE ? AS c", (f"file:{base_sens(base)}?mode=ro",))
+        clause, args = filtre_dans(dans, "p.fichier")
+        lignes = [r for r in con.execute(
+            "SELECT p.fichier, p.ligne, p.texte, c.v.v FROM passages p JOIN sens s ON s.rowid = p.rowid "
+            "JOIN c.v ON c.v.h = s.h WHERE p.type NOT IN ('archive', 'index')" + clause, args)
+            if len(r[2]) >= DOUBLONS_MIN and Path(r[0]).name != "MEMORY.md"]  # un MEMORY.md de sous-dossier aussi
+        total = sum(Path(f).name != "MEMORY.md" for (f,) in con.execute(
+            "SELECT p.fichier FROM passages p WHERE p.type NOT IN ('archive', 'index')" + clause, args))
+    finally:
+        con.close()
+    if not lignes:
+        print("aucun passage avec vecteur à comparer")
+        return 0
+    m = np.frombuffer(b"".join(r[3] for r in lignes), dtype=np.float32).reshape(len(lignes), -1)
+    paires = paires_proches([r[0] for r in lignes], m, seuil)
+    ordre = sorted(paires.items(), key=lambda kv: (-len(kv[1]), -kv[1][0][0]))
+    sans = total - len(lignes)
+    print(f"{len(paires)} paire(s) de notes proches (seuil {seuil:.2f} ; {len(lignes)} passages comparés"
+          + (f", {sans} trop courts ou sans vecteur" if sans else "") + ")")
+
+    def court(texte: str) -> str:
+        t = " ".join(texte.split())
+        return t if len(t) <= 110 else t[:109] + "…"
+
+    for (fa, fb), liste in ordre[:n]:
+        cos, i, j = liste[0]
+        if lignes[i][0] != fa:
+            i, j = j, i
+        print(f"\n{len(liste)} passage(s), jusqu'à {cos:.2f}  {fa}  ↔  {fb}")
+        print(f"    {fa}:{lignes[i][1]}  {court(lignes[i][2])}")
+        print(f"    {fb}:{lignes[j][1]}  {court(lignes[j][2])}")
+    if len(ordre) > n:
+        print(f"\n… {len(ordre) - n} autre(s) paire(s) : --n {len(ordre)}")
+    if ordre:
+        print("\nÀ trancher note par note : fusionner (garder la plus juste), ou corriger celle qui contredit.")
+    return 0
+
+
 POINT_NOTE = os.environ.get("MEM_POINT_NOTE") or "project/point-de-reprise.md"
 POINT_ARCHIVE = os.environ.get("MEM_POINT_ARCHIVE") or "archive/point-de-reprise.md"
 
@@ -1148,6 +1226,27 @@ def selftest() -> int:
                 finally:
                     os.environ.pop("MEM_DB") if ancien_db is None else os.environ.update(MEM_DB=ancien_db)
             cas(f"mem {' '.join(args[:1])} … : --dossier pris en compte", f"dossier : {vide}" in out.getvalue())
+
+        # doublons : regroupement par paire de notes, jamais deux passages d'une même note.
+        try:
+            import numpy as np
+        except ImportError:
+            print("(sauté : doublons, numpy absent)")
+        else:
+            m = np.array([[1, 0, 0], [0.99, 0.141, 0], [1, 0, 0], [0, 1, 0], [0, 0.995, 0.0999]], dtype=np.float32)
+            m /= np.linalg.norm(m, axis=1, keepdims=True)
+            pp = paires_proches(["a.md", "b.md", "a.md", "c.md", "d.md"], m, 0.95)
+            cas("doublons : paires de notes, passages d'une même note ignorés, tri du plus proche",
+                set(pp) == {("a.md", "b.md"), ("c.md", "d.md")} and len(pp[("a.md", "b.md")]) == 2
+                and pp[("a.md", "b.md")][0][0] >= pp[("a.md", "b.md")][1][0] - 1e-6)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            ancien_sens = os.environ.get("MEM_SENS")
+            os.environ["MEM_SENS"] = "0"
+            try:
+                rc = doublons(vide, Path(tmp) / "dbl.db")
+            finally:
+                os.environ.pop("MEM_SENS") if ancien_sens is None else os.environ.update(MEM_SENS=ancien_sens)
+        cas("doublons : sans le sens, code 2 et avis", rc == 2 and "par le sens" in err.getvalue())
 
         # verifier-perte : le garde-fou de mem point.
         def dossier(nom: str, fichiers: dict) -> Path:
@@ -1365,6 +1464,10 @@ def main(argv=None) -> int:
     a.add_argument("titre")
     sub.add_parser("indexer", parents=[commun])
     sub.add_parser("etat", parents=[commun])
+    dbl = sub.add_parser("doublons", parents=[commun], help="notes qui se répètent ou se contredisent (par le sens)")
+    dbl.add_argument("--seuil", type=float, default=DOUBLONS_SEUIL, help=f"cosinus minimal (défaut {DOUBLONS_SEUIL})")
+    dbl.add_argument("--n", type=int, default=20, help="paires de notes affichées")
+    dbl.add_argument("--dans", help="seulement ce sous-dossier (feedback/) ou cette note")
     sub.add_parser("selftest", parents=[commun])
     b = sub.add_parser("bench", parents=[commun])
     b.add_argument("questions", type=Path)
@@ -1427,6 +1530,14 @@ def main(argv=None) -> int:
         print(f"{total} passages indexés, {refus} lignes refusées")
     elif args.cmd == "etat":
         etat(racine, base)
+    elif args.cmd == "doublons":
+        dans = None
+        if args.dans is not None:
+            dans = normaliser_dans(racine, args.dans)
+            if dans is None:
+                print(f"mem : « {args.dans} » n'existe pas dans {racine}", file=sys.stderr)
+                return 2
+        return doublons(racine, base, args.seuil, args.n, dans)
     elif args.cmd == "point":
         return point(racine, args.fichier, args.note, args.archive, args.auteur)
     elif args.cmd == "bench":

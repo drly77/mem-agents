@@ -27,6 +27,7 @@ mem chercher --dans project/ "relay"         # only this subfolder (or one note:
 mem voir project/deploiement.md:12           # show a passage in context
 mem ajouter --type feedback "title" < text   # add a note
 mem etat                                     # notes, passages, lines withheld as secrets
+mem doublons                                 # notes that repeat or contradict each other (by meaning)
 mem bench questions.tsv                      # top 1, top 3, MRR on your own questions
 mem point point.md                           # new handover note before /clear or /compact
 mem selftest
