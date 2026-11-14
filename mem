@@ -19,6 +19,10 @@ comptée dans `mem etat`, sans son contenu.
     mem point FICHIER|-   (point de reprise neuf avant /clear ou /compact ; l'ancien part mot pour mot en archive)
     mem bench questions.tsv [--n 10]   (top 1, top 3, MRR ; une ligne « question<TAB>note,note »)
 
+Noms anglais (mêmes commandes) : search, show, add, index, status, stale, neighbors,
+duplicates, handover, check-loss ; --dir, --fast, --in, --all, --since, --anyway, --threshold,
+--repo, --author.
+
 Dossier : --dossier, sinon $MEM_DIR, sinon la mémoire Claude Code du dossier
 courant ou de l'un de ses parents (racine git commune comprise, pour les
 worktrees). Aucun repli : hors projet, donner --dossier ou MEM_DIR.
@@ -1449,7 +1453,8 @@ def selftest() -> int:
             os.environ.pop("MEM_SYNONYMES") if ancien_syn is None else os.environ.update(MEM_SYNONYMES=ancien_syn)
         vide = Path(tmp) / "vide"
         vide.mkdir()
-        for args in (["--dossier", str(vide), "etat"], ["etat", "--dossier", str(vide)]):
+        for args in (["--dossier", str(vide), "etat"], ["etat", "--dossier", str(vide)],
+                     ["--dir", str(vide), "status"], ["status", "--dir", str(vide)]):
             with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
                 ancien_db = os.environ.get("MEM_DB")
                 os.environ["MEM_DB"] = str(Path(tmp) / "base.sqlite")
@@ -1458,6 +1463,14 @@ def selftest() -> int:
                 finally:
                     os.environ.pop("MEM_DB") if ancien_db is None else os.environ.update(MEM_DB=ancien_db)
             cas(f"mem {' '.join(args[:1])} … : --dossier pris en compte", f"dossier : {vide}" in out.getvalue())
+        for en, fr in COMMANDES_EN.items():  # chaque nom anglais est déclaré et mène à sa commande française
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                try:
+                    main([en, "--help"])
+                    code = None
+                except SystemExit as e:
+                    code = e.code
+            cas(f"mem {en} = mem {fr}", code == 0 and f"usage: mem {fr} " in out.getvalue())
 
         # doublons : regroupement par paire de notes, jamais deux passages d'une même note.
         try:
@@ -1715,53 +1728,65 @@ def selftest() -> int:
     return 1 if echecs else 0
 
 
+# Noms anglais des commandes (les options anglaises sont déclarées à côté des françaises).
+COMMANDES_EN = {"search": "chercher", "show": "voir", "add": "ajouter", "neighbors": "voisins",
+                "index": "indexer", "status": "etat", "stale": "perimes", "duplicates": "doublons",
+                "handover": "point", "check-loss": "verifier-perte"}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="mem", description=__doc__.splitlines()[0])
-    ap.add_argument("--dossier", type=Path, help="dossier mémoire (sinon détecté, voir mem --help)")
+    ap.add_argument("--dossier", "--dir", type=Path, help="dossier mémoire (sinon détecté, voir mem --help)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     commun = argparse.ArgumentParser(add_help=False)  # « mem chercher --dossier D … » marche aussi
-    commun.add_argument("--dossier", type=Path, default=argparse.SUPPRESS, help="dossier mémoire")
-    c = sub.add_parser("chercher", parents=[commun])
+    commun.add_argument("--dossier", "--dir", type=Path, default=argparse.SUPPRESS, help="dossier mémoire")
+    c = sub.add_parser("chercher", aliases=["search"], parents=[commun])
     c.add_argument("mots", nargs="+")
     c.add_argument("--n", type=int, default=5)
     c.add_argument("--type")
-    c.add_argument("--depuis")
+    c.add_argument("--depuis", "--since")
     c.add_argument("--archives", action="store_true", help="chercher aussi dans archive/ d'emblée")
-    c.add_argument("--dans", help="seulement ce sous-dossier (project/) ou cette note (project/x.md)")
-    c.add_argument("--tous", action="store_true", help="notes de tous les auteurs, et les dossiers de ~/.config/mem/dossiers")
-    c.add_argument("--vite", action="store_true", help="sans reclassement par le modèle local (0,3 s au lieu de ~8 s)")
-    v = sub.add_parser("voir", parents=[commun])
+    c.add_argument("--dans", "--in", help="seulement ce sous-dossier (project/) ou cette note (project/x.md)")
+    c.add_argument("--tous", "--all", action="store_true",
+                   help="notes de tous les auteurs, et les dossiers de ~/.config/mem/dossiers")
+    c.add_argument("--vite", "--fast", action="store_true", help="sans reclassement par le modèle local (0,3 s au lieu de ~8 s)")
+    v = sub.add_parser("voir", aliases=["show"], parents=[commun])
     v.add_argument("cible")
-    a = sub.add_parser("ajouter", parents=[commun])
+    a = sub.add_parser("ajouter", aliases=["add"], parents=[commun])
     a.add_argument("--type", required=True, choices=["user", "feedback", "project", "reference"])
-    a.add_argument("titre")
-    a.add_argument("--quand-meme", action="store_true", help="écrire même si une note proche existe déjà")
-    vs = sub.add_parser("voisins", parents=[commun], help="notes proches d'une note (doublon avant de la garder)")
+    a.add_argument("titre", metavar="titre|title")
+    a.add_argument("--quand-meme", "--anyway", action="store_true", help="écrire même si une note proche existe déjà")
+    vs = sub.add_parser("voisins", aliases=["neighbors"], parents=[commun],
+                        help="notes proches d'une note (doublon avant de la garder)")
     vs.add_argument("note")
-    vs.add_argument("--seuil", type=float, default=VOISINS_SEUIL)
-    sub.add_parser("indexer", parents=[commun])
-    sub.add_parser("etat", parents=[commun])
-    per = sub.add_parser("perimes", parents=[commun], help="notes qui renvoient à ce qui n'existe plus")
-    per.add_argument("--depot", type=Path, action="append", help="dépôt git où chercher fichiers et commits (répétable)")
+    vs.add_argument("--seuil", "--threshold", type=float, default=VOISINS_SEUIL)
+    sub.add_parser("indexer", aliases=["index"], parents=[commun])
+    sub.add_parser("etat", aliases=["status"], parents=[commun])
+    per = sub.add_parser("perimes", aliases=["stale"], parents=[commun], help="notes qui renvoient à ce qui n'existe plus")
+    per.add_argument("--depot", "--repo", type=Path, action="append",
+                     help="dépôt git où chercher fichiers et commits (répétable)")
     per.add_argument("--n", type=int, default=30, help="notes affichées")
-    per.add_argument("--dans", help="seulement ce sous-dossier (project/) ou cette note")
-    dbl = sub.add_parser("doublons", parents=[commun], help="notes qui se répètent ou se contredisent (par le sens)")
-    dbl.add_argument("--seuil", type=float, default=DOUBLONS_SEUIL, help=f"cosinus minimal (défaut {DOUBLONS_SEUIL})")
+    per.add_argument("--dans", "--in", help="seulement ce sous-dossier (project/) ou cette note")
+    dbl = sub.add_parser("doublons", aliases=["duplicates"], parents=[commun],
+                         help="notes qui se répètent ou se contredisent (par le sens)")
+    dbl.add_argument("--seuil", "--threshold", type=float, default=DOUBLONS_SEUIL,
+                     help=f"cosinus minimal (défaut {DOUBLONS_SEUIL})")
     dbl.add_argument("--n", type=int, default=20, help="paires de notes affichées")
-    dbl.add_argument("--dans", help="seulement ce sous-dossier (feedback/) ou cette note")
+    dbl.add_argument("--dans", "--in", help="seulement ce sous-dossier (feedback/) ou cette note")
     sub.add_parser("selftest", parents=[commun])
     b = sub.add_parser("bench", parents=[commun])
     b.add_argument("questions", type=Path)
     b.add_argument("--n", type=int, default=10)
-    pt = sub.add_parser("point", parents=[commun], help="point de reprise neuf (avant /clear ou /compact)")
+    pt = sub.add_parser("point", aliases=["handover"], parents=[commun], help="point de reprise neuf (avant /clear ou /compact)")
     pt.add_argument("fichier", help="fichier du point neuf, ou « - » pour l'entrée standard")
     pt.add_argument("--note", default=POINT_NOTE, help=f"note du point, relative au dossier ({POINT_NOTE})")
     pt.add_argument("--archive", default=POINT_ARCHIVE, help=f"archive des anciens points ({POINT_ARCHIVE})")
-    pt.add_argument("--auteur", default="", help="nom de l'agent, repris dans le commit et l'archive")
-    p = sub.add_parser("verifier-perte", parents=[commun])
+    pt.add_argument("--auteur", "--author", default="", help="nom de l'agent, repris dans le commit et l'archive")
+    p = sub.add_parser("verifier-perte", aliases=["check-loss"], parents=[commun])
     p.add_argument("avant", type=Path)
     p.add_argument("apres", type=Path)
     args = ap.parse_args(argv)
+    args.cmd = COMMANDES_EN.get(args.cmd, args.cmd)  # « mem search » = « mem chercher »
 
     if args.cmd == "selftest":
         return selftest()

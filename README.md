@@ -18,20 +18,21 @@ it falls back to `grep`, and misses anything phrased with different words.
 The notes stay the only source of truth: `mem` only keeps an index, rebuilt whenever a note changes.
 No text leaves the machine.
 
-The tool itself speaks French (commands, help, messages); the commands are short and listed below.
+Every command and option has an English name (below) and a French one (`mem chercher`, `--vite`…):
+both work. Help and messages are in French.
 
 ```
-mem chercher "who is allowed to deploy?"     # search
-mem chercher --vite "database migration"     # no reranking: ~0.3 s
-mem chercher --dans project/ "relay"         # only this subfolder (or one note: project/x.md)
-mem voir project/deploiement.md:12           # show a passage in context
-mem ajouter --type feedback "title" < text   # add a note
-mem etat                                     # notes, passages, lines withheld as secrets
-mem doublons                                 # notes that repeat or contradict each other (by meaning)
-mem voisins project/x.md                     # notes that already say what x.md says (hook: integration/mem-voisins-hook.py)
-mem perimes                                  # dead references: path, file, commit, index entry
+mem search "who is allowed to deploy?"       # search
+mem search --fast "database migration"       # no reranking: ~0.3 s
+mem search --in project/ "relay"             # only this subfolder (or one note: project/x.md)
+mem show project/deploiement.md:12           # show a passage in context
+mem add --type feedback "title" < text       # add a note
+mem status                                   # notes, passages, lines withheld as secrets
+mem duplicates                               # notes that repeat or contradict each other (by meaning)
+mem neighbors project/x.md                   # notes that already say what x.md says (hook: integration/mem-voisins-hook.py)
+mem stale                                    # dead references: path, file, commit, index entry
 mem bench questions.tsv                      # top 1, top 3, MRR on your own questions
-mem point point.md                           # new handover note before /clear or /compact
+mem handover point.md                        # new handover note before /clear or /compact
 mem selftest
 ```
 
@@ -70,7 +71,7 @@ What we did:
    to keep in view, you need more. Adapt it to your needs by watching what your sessions cost.
 2. **Startup files cut down to the essentials**: CLAUDE.md from 23 KB to 4 KB (the full old version
    archived), MEMORY.md from 111 to 43 lines (24 KB to 8 KB), older entries moved verbatim into
-   `archive/`, nothing lost (checked with `mem verifier-perte`). These two files are 74% lighter
+   `archive/`, nothing lost (checked with `mem check-loss`). These two files are 74% lighter
    (47 KB → 12 KB, roughly 15,000 → 4,000 tokens). Claude Code included, startup goes from about 55,000
    to 44,000 tokens, and those ~11,000 tokens are given back to the conversation: under the same ceiling,
    the agent keeps more messages, code and results in view before it has to go through /clear.
@@ -88,14 +89,14 @@ after. The share of CLAUDE.md and MEMORY.md is estimated from their size; the re
 which varies with its version and enabled tools (we had also turned off unused connectors). At worst, a
 turn used to reread ~500,000 tokens; it now rereads ~250,000 at most.
 
-The handover note (`mem point`) is what makes /clear safe: the agent restarts from an empty context,
+The handover note (`mem handover`) is what makes /clear safe: the agent restarts from an empty context,
 but with a state it wrote itself, and `mem` for everything else.
 
 ## How it works
 
 ```mermaid
 flowchart LR
-  Q["question<br/>mem chercher"] --> W["word index<br/>SQLite FTS5, BM25"]
+  Q["question<br/>mem search"] --> W["word index<br/>SQLite FTS5, BM25"]
   Q --> S["meaning index<br/>bge-m3, local Ollama"]
   W --> F["merge both rankings<br/>RRF"]
   S --> F
@@ -108,7 +109,7 @@ flowchart LR
 - A search never modifies the notes: `mem` keeps an index next to them
   (`~/.local/share/mem/<project>.db`), rebuilt only for the notes that changed.
 - Meaning and reranking are optional: without Ollama, search stops at words;
-  `--vite` stops after the merge (~0.3 s instead of ~7 s).
+  `--fast` stops after the merge (~0.3 s instead of ~7 s).
 - Everything stays on the machine: Ollama runs locally, and the reranker makes no network calls.
 
 ## Install
@@ -119,7 +120,7 @@ flowchart LR
    mem selftest
    ```
    Run from a project directory (or any subdirectory, worktrees included), `mem` finds that
-   project's Claude Code memory. Elsewhere: `--dossier` or `MEM_DIR`. It never opens another
+   project's Claude Code memory. Elsewhere: `--dir` or `MEM_DIR`. It never opens another
    project's memory by default.
 
 2. **Search by meaning** (optional): a local [Ollama](https://ollama.com), then `ollama pull bge-m3`.
@@ -150,7 +151,7 @@ The suggested cycle, with the files in `integration/` (written in French; transl
    (global `~/.claude/CLAUDE.md` or the project's).
 2. **Before /clear or /compact**: copy `integration/avant-clear.md` into `~/.claude/commands/`,
    then type `/avant-clear`. The agent writes a handover note ("POINT DE REPRISE": verified state,
-   work in progress, decisions, next step, "do this first") and files it with `mem point`: the
+   work in progress, decisions, next step, "do this first") and files it with `mem handover`: the
    previous note goes **verbatim** into `archive/point-de-reprise.md`, a check makes sure no line was
    lost (otherwise nothing is written), and the memory directory is committed if it is a git repo.
 3. **Type /clear** (or /compact).
@@ -164,7 +165,7 @@ The suggested cycle, with the files in `integration/` (written in French; transl
 flowchart LR
   T["the agent works<br/>and searches with mem"] --> P["/avant-clear<br/>it writes its handover note"]
   G["Stop hook, not included<br/>context ceiling"] -.-> P
-  P --> MP["mem point<br/>previous note archived verbatim,<br/>check, commit"]
+  P --> MP["mem handover<br/>previous note archived verbatim,<br/>check, commit"]
   MP --> C["/clear or /compact"]
   C --> H["SessionStart hook<br/>mem-reprise"]
   H --> L["the agent rereads its note<br/>and does its first steps"]
@@ -173,7 +174,7 @@ flowchart LR
 
 `mem` recognises these notes ("POINT DE REPRISE"): older ones rank below lasting rules, unless the
 question asks for the "latest" state. Several agents on one project:
-`mem point --note project/point-<agent>.md --archive archive/point-<agent>.md --auteur <agent>`,
+`mem handover --note project/point-<agent>.md --archive archive/point-<agent>.md --author <agent>`,
 or `MEM_POINT_NOTE` and `MEM_POINT_ARCHIVE` in each agent's environment (the hook reads
 `MEM_POINT_NOTE` too).
 
@@ -187,10 +188,10 @@ memory of 182 notes:
 
 | Mode | Time per search |
 |---|---|
-| `--vite` (words + meaning) | ~0.3 s |
+| `--fast` (words + meaning) | ~0.3 s |
 | reranking, service running | ~6 to 8 s |
 | reranking, no service | ~9 s |
-| reranking, CPU only | ~38 s: use `--vite` or `MEM_RECLASSER=0` |
+| reranking, CPU only | ~38 s: use `--fast` or `MEM_RECLASSER=0` |
 
 Quality, on a **private** benchmark of 200 questions written by another agent from that memory
 (paraphrases, situations, past states). MRR: mean of 1/rank of the right note (1 = always first).
@@ -208,7 +209,7 @@ before relying on reranking.
 
 A line that looks like a secret (private key, known token format, `password: …`, URL with credentials,
 long random string…) does not enter the index: its value becomes `[masqué]`, or the line is dropped,
-and `mem etat` counts it. This is a **safety net, not a guarantee**: a lowercase password inside a
+and `mem status` counts it. This is a **safety net, not a guarantee**: a lowercase password inside a
 sentence ("the password is hunter") cannot be told apart from "the password is required" and stays
 visible. The only reliable rule: do not write secrets into agent memory.
 
@@ -221,13 +222,13 @@ visible. The only reliable rule: do not write secrets into agent memory.
 | `MEM_SENS=0` | no search by meaning |
 | `MEM_SENS_URL` | Ollama endpoint (`http://127.0.0.1:11434/api/embed`) |
 | `MEM_SENS_GARDER=0` | let Ollama unload bge-m3 after 5 minutes |
-| `MEM_RECLASSER=0` | no reranking (same as `--vite`) |
+| `MEM_RECLASSER=0` | no reranking (same as `--fast`) |
 | `MEM_RECLASSEUR` | reranker directory |
 | `MEM_SYNONYMES` | extra synonym groups (default `$XDG_CONFIG_HOME/mem/synonymes.txt`, or `~/.config/…`) |
 | `MEM_RECLASSEUR_SOCKET` | reranking service socket (default `$XDG_RUNTIME_DIR/mem-reclasseur.sock`; never `/tmp`) |
 | `MEM_PROJETS` | roots of per-project memories, separated by ":" (default `~/.claude/projects` then `~/.openclaude/projects`) |
 | `MEM_POINT_NOTE`, `MEM_POINT_ARCHIVE` | handover note and its archive (`project/point-de-reprise.md`, `archive/point-de-reprise.md`) |
-| `AGENT_NOM` | agent name: `mem ajouter` records it as author, and `mem chercher` only shows that agent's notes and notes without an author (`--tous` for all) |
+| `AGENT_NOM` | agent name: `mem add` records it as author, and `mem search` only shows that agent's notes and notes without an author (`--all` for all) |
 
 Project-specific synonyms: one group per line, words separated by commas.
 ```

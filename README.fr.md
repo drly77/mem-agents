@@ -18,6 +18,10 @@ il cherche avec `grep`, et rate tout ce qui est dit avec d'autres mots.
 Les notes restent la seule source : `mem` n'en tient qu'un index, refait dès qu'une note change.
 Aucun texte ne quitte la machine.
 
+Chaque commande et chaque option a aussi un nom anglais, qui marche de la même façon : `search`, `show`,
+`add`, `status`, `duplicates`, `neighbors`, `stale`, `handover`, `check-loss`, `index` ; `--dir`, `--fast`,
+`--in`, `--all`, `--since`, `--anyway`, `--threshold`, `--repo`, `--author`.
+
 ```
 mem chercher "qui a le droit de déployer ?"
 mem chercher --vite "migration base"        # sans reclassement : ~0,3 s
