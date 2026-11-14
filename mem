@@ -1066,7 +1066,7 @@ RENVOI_FICHIER = re.compile(r"(?<![\w/.~-])((?:[\w-][\w.-]*/)+[\w.-]+\.(?:py|sh|
 RENVOI_COMMIT = re.compile(r"(?<![\w/#.-])([0-9a-f]{7,12})(?![\w/…-])")
 # Mots qui, juste avant (40 caractères), disent qu'un hexadécimal n'est pas un commit : empreinte d'un point,
 # identifiant de session, somme sha256, exemple.
-PAS_UN_COMMIT = re.compile(r"empreinte|session|projet|sha|uuid|\bex\.|exemple|\bid\b", re.I)
+PAS_UN_COMMIT = re.compile(r"empreinte|session|conversation|projet|sha|uuid|\bex\.|exemple|\bid\b", re.I)
 RENVOI_LIEN = re.compile(r"\[\[([^\]|#]+)")
 RENVOI_INDEX = re.compile(r"\]\(([^)#\s]+\.md)\)")
 
@@ -1179,12 +1179,13 @@ def perimes(racine: Path, depots: list[Path] | None = None, n: int = 30, dans: s
     ordre = sorted(morts.items(), key=lambda kv: (-len(kv[1]), kv[0]))
     print(f"{len(morts)} note(s) avec des renvois introuvables ici (hors archives ; dépôts : "
           f"{', '.join(d.name for d in depots) or 'aucun'})")
+    detail = 10**6 if dans and not dans.endswith("/") else 5  # une seule note demandée : tout son détail
     for rel, liste in ordre[:n]:
         print(f"\n{rel} : {len(liste)}")
-        for ligne, genre, renvoi in liste[:5]:
+        for ligne, genre, renvoi in liste[:detail]:
             print(f"    :{ligne:<4} {genre:<8} {renvoi}")
-        if len(liste) > 5:
-            print(f"    … {len(liste) - 5} de plus")
+        if len(liste) > detail:
+            print(f"    … {len(liste) - detail} de plus : --dans {rel}")
     if len(ordre) > n:
         print(f"\n… {len(ordre) - n} autre(s) note(s) : --n {len(ordre)}")
     if index_morts:
