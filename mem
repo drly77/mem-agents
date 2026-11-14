@@ -936,7 +936,17 @@ def est_sous_suite(petite: list[str], grande: list[str]) -> bool:
 
 def verifier_perte(avant: Path, apres: Path) -> int:
     """Rien de perdu : chaque ligne d'avant, doublons compris, existe autant de fois après ; et l'ordre des
-    lignes de chaque note est conservé dans la note vivante suivie de ses archives (ou l'inverse)."""
+    lignes de chaque note est conservé dans la note vivante suivie de ses archives (ou l'inverse).
+    Code 2 si AVANT ou APRÈS n'est pas un dossier, ou si AVANT n'a aucune note : une faute de frappe ne passe
+    jamais pour « rien de perdu »."""
+    for nom, d in (("AVANT", avant), ("APRÈS", apres)):
+        if not d.is_dir():
+            print(f"mem verifier-perte : {nom} {d} n'est pas un dossier", file=sys.stderr)
+            return 2
+    if not notes(avant):
+        print(f"mem verifier-perte : aucune note .md dans AVANT {avant}", file=sys.stderr)
+        return 2
+
     def lire(p: Path) -> list[str]:
         return [l.rstrip() for l in p.read_text(encoding="utf-8", errors="replace").splitlines() if l.strip()]
 
@@ -944,6 +954,11 @@ def verifier_perte(avant: Path, apres: Path) -> int:
     fichiers_apres = {str(p.relative_to(apres)): lire(p) for p in notes(apres)}
     for lignes in fichiers_apres.values():
         compte_apres.update(lignes)
+    # Tables faites une fois (et non à chaque note d'avant) : archives triées, fichiers d'après par nom.
+    archives_apres = sorted((r, ls) for r, ls in fichiers_apres.items() if r.startswith("archive/"))
+    par_nom = collections.defaultdict(list)
+    for r, ls in fichiers_apres.items():
+        par_nom[Path(r).name].append(ls)
     compte_avant = collections.Counter()
     problemes = []
     for p in notes(avant):
@@ -951,10 +966,9 @@ def verifier_perte(avant: Path, apres: Path) -> int:
         lignes = lire(p)
         compte_avant.update(lignes)
         vivant = fichiers_apres.get(rel, [])
-        archives = [l for r, ls in sorted(fichiers_apres.items())
-                    if r.startswith("archive/") and Path(r).stem.startswith(p.stem) for l in ls]
+        archives = [l for r, ls in archives_apres if Path(r).stem.startswith(p.stem) for l in ls]
         if not (est_sous_suite(lignes, vivant + archives) or est_sous_suite(lignes, archives + vivant)
-                or any(est_sous_suite(lignes, ls) for r, ls in fichiers_apres.items() if Path(r).name == p.name)):
+                or any(est_sous_suite(lignes, ls) for ls in par_nom[p.name])):
             problemes.append(f"ordre ou contenu changé : {rel}")
     manque = compte_avant - compte_apres
     for ligne, nb in list(manque.items())[:50]:
@@ -1134,6 +1148,30 @@ def selftest() -> int:
                 finally:
                     os.environ.pop("MEM_DB") if ancien_db is None else os.environ.update(MEM_DB=ancien_db)
             cas(f"mem {' '.join(args[:1])} … : --dossier pris en compte", f"dossier : {vide}" in out.getvalue())
+
+        # verifier-perte : le garde-fou de mem point.
+        def dossier(nom: str, fichiers: dict) -> Path:
+            d = Path(tmp) / nom
+            for rel, texte in fichiers.items():
+                (d / rel).parent.mkdir(parents=True, exist_ok=True)
+                (d / rel).write_text(texte, encoding="utf-8")
+            return d
+        av = dossier("vp-avant", {"project/a.md": "un\ndeux\ntrois\nun\n"})
+        for nom, apres, attendu in (
+                ("identique", {"project/a.md": "un\ndeux\ntrois\nun\n"}, 0),
+                ("lignes passées dans l'archive", {"project/a.md": "un\n", "archive/a-ancien.md": "deux\ntrois\nun\n"}, 0),
+                ("ligne supprimée", {"project/a.md": "un\ntrois\nun\n"}, 1),
+                ("doublon retiré", {"project/a.md": "un\ndeux\ntrois\n"}, 1),
+                ("ordre inversé", {"project/a.md": "un\ntrois\ndeux\nun\n"}, 1),
+                ("ligne partie dans une autre note", {"project/a.md": "un\ndeux\nun\n", "project/b.md": "trois\n"}, 1)):
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = verifier_perte(av, dossier("vp-" + str(abs(hash(nom))), apres))
+            cas(f"verifier-perte : {nom} → code {attendu}", rc == attendu)
+        with contextlib.redirect_stderr(io.StringIO()):  # code 2 : rien sur stdout
+            cas("verifier-perte : AVANT absent → code 2, jamais « rien perdu »",
+                verifier_perte(Path(tmp) / "absent", av) == 2)
+            cas("verifier-perte : APRÈS absent → code 2", verifier_perte(av, Path(tmp) / "absent") == 2)
+            cas("verifier-perte : AVANT sans note → code 2", verifier_perte(vide, av) == 2)
 
     # Valeurs factices, assemblées pour qu'aucun outil ne les prenne pour de vraies clés.
     sk = "sk-" + "Ab3" * 9
