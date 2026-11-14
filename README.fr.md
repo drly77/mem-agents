@@ -26,6 +26,7 @@ mem voir project/deploiement.md:12
 mem ajouter --type feedback "titre" < texte
 mem etat                                     # notes, passages, lignes écartées comme secrets
 mem doublons                                 # notes qui se répètent ou se contredisent (par le sens)
+mem perimes                                  # renvois morts : chemin, fichier, commit, note de l'index
 mem bench questions.tsv                      # top 1, top 3, MRR sur vos propres questions
 mem point point.md                           # point de reprise neuf avant /clear ou /compact
 mem selftest

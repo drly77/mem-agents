@@ -11,6 +11,7 @@ comptée dans `mem etat`, sans son contenu.
     mem voir fichier:ligne
     mem ajouter --type project "titre" < texte
     mem indexer | mem etat
+    mem perimes [--depot D] [--dans project/]   (renvois morts : chemin, fichier, commit, note de l'index)
     mem doublons [--seuil 0.88] [--dans feedback/]   (notes qui se répètent ou se contredisent)
     mem selftest   (lignes pièges du filtre de secrets et des commandes, dans une mémoire jetable)
     mem verifier-perte AVANT APRES
@@ -1058,6 +1059,147 @@ def doublons(racine: Path, base: Path, seuil: float = DOUBLONS_SEUIL, n: int = 2
     return 0
 
 
+# Renvois vérifiables d'une note : chemin local, fichier relatif (au dépôt ou à la mémoire), commit, lien.
+RENVOI_CHEMIN = re.compile(r"(?<![\w/.~-])((?:~|" + re.escape(str(Path.home())) + r")/[\w.@+/-]+)")
+RENVOI_FICHIER = re.compile(r"(?<![\w/.~-])((?:[\w-][\w.-]*/)+[\w.-]+\.(?:py|sh|md|mjs|js|ts|json|toml|ya?ml|html|css|kt|"
+                            r"service|timer|conf|txt|tsv|sql))\b")
+RENVOI_COMMIT = re.compile(r"(?<![\w/#.-])([0-9a-f]{7,12})(?![\w/…-])")
+# Mots qui, juste avant (40 caractères), disent qu'un hexadécimal n'est pas un commit : empreinte d'un point,
+# identifiant de session, somme sha256, exemple.
+PAS_UN_COMMIT = re.compile(r"empreinte|session|projet|sha|uuid|\bex\.|exemple|\bid\b", re.I)
+RENVOI_LIEN = re.compile(r"\[\[([^\]|#]+)")
+RENVOI_INDEX = re.compile(r"\]\(([^)#\s]+\.md)\)")
+
+
+def depots_connus(racine: Path, depots: list[Path] | None = None) -> list[Path]:
+    """Dépôts git où chercher les commits et les fichiers : ceux donnés, sinon celui du dossier courant et ceux
+    qui l'englobent (~/Scripts/Claude autour d'AIMailBox), celui de la mémoire, et ~/.config/mem/depots."""
+    if depots:
+        candidats = list(depots)
+    else:
+        candidats = [Path.cwd(), racine]
+        try:
+            liste = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "mem" / "depots"
+            candidats += [Path(l.strip()).expanduser() for l in liste.read_text(encoding="utf-8").splitlines()
+                          if l.strip() and not l.startswith("#")]
+        except (OSError, ValueError):
+            pass
+    vus: list[Path] = []
+    for d in candidats:
+        while d.is_dir():
+            r = subprocess.run(["git", "-C", str(d), "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+            if r.returncode != 0:
+                break
+            haut = Path(r.stdout.strip())
+            if haut not in vus:
+                vus.append(haut)
+            if depots or haut.parent == haut:
+                break  # dépôts donnés à la main : pas de remontée
+            d = haut.parent
+    return vus
+
+
+def renvois_morts(racine: Path, depots: list[Path], dans: str | None = None) -> tuple[dict, list, collections.Counter]:
+    """({note: [(ligne, genre, renvoi)]}, [(index, ligne, lien)], {lien [[…]] sans note: nombre}).
+    Hors archives : une archive raconte le passé, ses renvois ont le droit d'être morts. Une ligne qui ressemble
+    à un secret n'est pas lue."""
+    toutes = [p for p in notes(racine) if not str(p.relative_to(racine)).startswith("archive/")]
+    if dans:
+        toutes = [p for p in toutes if (str(p.relative_to(racine)).startswith(dans) if dans.endswith("/")
+                                        else str(p.relative_to(racine)) == dans)]
+    noms = {p.stem for p in notes(racine)}
+    for p in notes(racine):
+        try:
+            entete, _ = lire_entete(p.read_text(encoding="utf-8", errors="replace").splitlines())
+        except OSError:
+            continue
+        if entete.get("name"):
+            noms.add(entete["name"])
+    # Fichiers suivis des dépôts, par toutes leurs fins de chemin : « api/aide.py » trouve app/api/aide.py.
+    suivis: set[str] = set()
+    for d in depots:
+        r = subprocess.run(["git", "-C", str(d), "ls-files", "-z"], capture_output=True, text=True)
+        for f in r.stdout.split("\0"):
+            morceaux = f.split("/")
+            suivis.update("/".join(morceaux[i:]) for i in range(len(morceaux)))
+    morts, index_morts, liens = collections.defaultdict(list), [], collections.Counter()
+    commits: dict[str, list] = collections.defaultdict(list)
+    for p in toutes:
+        rel = str(p.relative_to(racine))
+        for n, l in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
+            if motif_secret(l):
+                continue
+            for m in RENVOI_CHEMIN.finditer(l):
+                chemin = m.group(1).rstrip(".,;:")
+                if l[m.end():m.end() + 1] in ("<", "{", "*", "$", "…") or "…" in chemin:
+                    continue  # gabarit (~/coffre-<date>), pas un fichier
+                if not Path(chemin).expanduser().exists():
+                    morts[rel].append((n, "chemin", chemin))
+            for m in RENVOI_FICHIER.finditer(l):
+                f = m.group(1)
+                if (l[m.end():m.end() + 1] in ("<", "{", "*") or l[m.start() - 1:m.start()] in ("<", "{", "*")
+                        or f.startswith("scratchpad/")  # gabarit, ou brouillon de session (jetable par nature)
+                        or l[m.start() - 2:m.start()] == "]("):  # lien d'index : vérifié plus bas, une seule fois
+                    continue
+                if f not in suivis and not any((base_ / f).exists() for base_ in (racine, p.parent, *depots)):
+                    morts[rel].append((n, "fichier", f))
+            for m in RENVOI_COMMIT.finditer(l):
+                h = m.group(1)
+                if (re.search(r"[a-f]", h) and re.search(r"\d", h) and l[m.end():m.end() + 1] != "…"
+                        and not PAS_UN_COMMIT.search(l[max(0, m.start() - 40):m.start()])):
+                    commits[h].append((rel, n))
+            for m in RENVOI_LIEN.finditer(l):
+                if m.group(1).strip() not in noms:
+                    liens[m.group(1).strip()] += 1
+            if p.name == "MEMORY.md":
+                for m in RENVOI_INDEX.finditer(l):
+                    if not (p.parent / m.group(1)).exists():
+                        index_morts.append((rel, n, m.group(1)))
+    inconnus = set(commits)
+    for d in depots:
+        if not inconnus:
+            break
+        essai = sorted(inconnus)
+        r = subprocess.run(["git", "-C", str(d), "cat-file", "--batch-check"], input="".join(h + "\n" for h in essai),
+                           capture_output=True, text=True)
+        # Une ligne de réponse par question, dans l'ordre : « <sha complet> commit … », « <h> missing », « <h> ambiguous ».
+        inconnus -= {h for h, rep_ in zip(essai, r.stdout.splitlines(), strict=False) if not rep_.endswith(" missing")}
+    for h in inconnus:
+        for rel, n in commits[h]:
+            morts[rel].append((n, "commit", h))
+    return {k: sorted(set(v)) for k, v in morts.items()}, index_morts, liens
+
+
+def perimes(racine: Path, depots: list[Path] | None = None, n: int = 30, dans: str | None = None) -> int:
+    """Notes qui renvoient à ce qui n'existe plus ici : chemin local, fichier du dépôt ou de la mémoire, commit,
+    note de l'index. Code 1 s'il y en a. Ce qui vit ailleurs (VPS, VM, branche non récupérée) sort aussi :
+    c'est une liste à vérifier, pas une preuve."""
+    depots = depots_connus(racine, depots)
+    morts, index_morts, liens = renvois_morts(racine, depots, dans)
+    ordre = sorted(morts.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+    print(f"{len(morts)} note(s) avec des renvois introuvables ici (hors archives ; dépôts : "
+          f"{', '.join(d.name for d in depots) or 'aucun'})")
+    for rel, liste in ordre[:n]:
+        print(f"\n{rel} : {len(liste)}")
+        for ligne, genre, renvoi in liste[:5]:
+            print(f"    :{ligne:<4} {genre:<8} {renvoi}")
+        if len(liste) > 5:
+            print(f"    … {len(liste) - 5} de plus")
+    if len(ordre) > n:
+        print(f"\n… {len(ordre) - n} autre(s) note(s) : --n {len(ordre)}")
+    if index_morts:
+        print(f"\nIndex : {len(index_morts)} ligne(s) vers une note absente")
+        for rel, ligne, lien in index_morts:
+            print(f"    {rel}:{ligne}  {lien}")
+    if liens:
+        print(f"\nLiens [[…]] sans note ({len(liens)}, des notes à écrire, pas forcément une erreur) : "
+              + ", ".join(sorted(liens)))
+    if morts or index_morts:
+        print("\nPour chaque renvoi : vérifier en direct, puis corriger la note (ou la passer en archive si elle"
+              " ne décrit plus que le passé).")
+    return 1 if morts or index_morts else 0
+
+
 POINT_NOTE = os.environ.get("MEM_POINT_NOTE") or "project/point-de-reprise.md"
 POINT_ARCHIVE = os.environ.get("MEM_POINT_ARCHIVE") or "archive/point-de-reprise.md"
 
@@ -1247,6 +1389,38 @@ def selftest() -> int:
             finally:
                 os.environ.pop("MEM_SENS") if ancien_sens is None else os.environ.update(MEM_SENS=ancien_sens)
         cas("doublons : sans le sens, code 2 et avis", rc == 2 and "par le sens" in err.getvalue())
+
+        # perimes : renvois morts, dans une mémoire et un dépôt jetables.
+        if subprocess.run(["git", "--version"], capture_output=True).returncode == 0:
+            dep, mp = Path(tmp) / "depot", Path(tmp) / "mp"
+            (dep / "app" / "api").mkdir(parents=True)
+            (dep / "app" / "api" / "aide.py").write_text("x\n", encoding="utf-8")
+            ident = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+            subprocess.run(["git", "-C", str(dep), "init", "-q"], check=True)
+            subprocess.run(["git", "-C", str(dep), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(dep), *ident, "commit", "-q", "-m", "x"], check=True)
+            vrai = subprocess.run(["git", "-C", str(dep), "rev-parse", "--short=8", "HEAD"],
+                                  capture_output=True, text=True).stdout.strip()
+            faux = "0a1b2c3d" if vrai != "0a1b2c3d" else "0a1b2c3e"
+            (mp / "project").mkdir(parents=True)
+            (mp / "archive").mkdir()
+            (mp / "project" / "n.md").write_text(
+                f"---\nname: n\n---\n- prod = {vrai}, ancien {faux}\n- empreinte 9f8e7d6c, session 1a2b3c4d\n"
+                f"- code : api/aide.py et api/disparu.py ; ~/nexiste-pas-mem-selftest/x ; ~/coffre-<date>\n"
+                f"- voir [[n]] et [[a-ecrire]]\n", encoding="utf-8")
+            (mp / "archive" / "vieux.md").write_text(f"- {faux} api/disparu.py\n", encoding="utf-8")
+            (mp / "MEMORY.md").write_text("- [N](project/n.md)\n- [Partie](project/partie.md)\n", encoding="utf-8")
+            morts, index_m, liens = renvois_morts(mp, [dep])
+            trouves = {(g, r) for _, g, r in morts.get("project/n.md", [])}
+            cas("perimes : commit absent, fichier absent, chemin absent signalés",
+                trouves == {("commit", faux), ("fichier", "api/disparu.py"), ("chemin", "~/nexiste-pas-mem-selftest/x")})
+            cas("perimes : archive ignorée, commit présent, fin de chemin suivie, empreinte et gabarit tus",
+                set(morts) == {"project/n.md"})
+            cas("perimes : ligne de MEMORY.md vers une note absente",
+                index_m == [("MEMORY.md", 2, "project/partie.md")])
+            cas("perimes : lien [[…]] sans note compté à part", set(liens) == {"a-ecrire"})
+        else:
+            print("(sauté : perimes, git absent)")
 
         # verifier-perte : le garde-fou de mem point.
         def dossier(nom: str, fichiers: dict) -> Path:
@@ -1464,6 +1638,10 @@ def main(argv=None) -> int:
     a.add_argument("titre")
     sub.add_parser("indexer", parents=[commun])
     sub.add_parser("etat", parents=[commun])
+    per = sub.add_parser("perimes", parents=[commun], help="notes qui renvoient à ce qui n'existe plus")
+    per.add_argument("--depot", type=Path, action="append", help="dépôt git où chercher fichiers et commits (répétable)")
+    per.add_argument("--n", type=int, default=30, help="notes affichées")
+    per.add_argument("--dans", help="seulement ce sous-dossier (project/) ou cette note")
     dbl = sub.add_parser("doublons", parents=[commun], help="notes qui se répètent ou se contredisent (par le sens)")
     dbl.add_argument("--seuil", type=float, default=DOUBLONS_SEUIL, help=f"cosinus minimal (défaut {DOUBLONS_SEUIL})")
     dbl.add_argument("--n", type=int, default=20, help="paires de notes affichées")
@@ -1530,6 +1708,14 @@ def main(argv=None) -> int:
         print(f"{total} passages indexés, {refus} lignes refusées")
     elif args.cmd == "etat":
         etat(racine, base)
+    elif args.cmd == "perimes":
+        dans = None
+        if args.dans is not None:
+            dans = normaliser_dans(racine, args.dans)
+            if dans is None:
+                print(f"mem : « {args.dans} » n'existe pas dans {racine}", file=sys.stderr)
+                return 2
+        return perimes(racine, [d.expanduser() for d in args.depot] if args.depot else None, args.n, dans)
     elif args.cmd == "doublons":
         dans = None
         if args.dans is not None:
