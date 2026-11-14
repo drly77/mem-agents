@@ -5,6 +5,12 @@
         "matcher": "clear|compact",
         "hooks": [{ "type": "command", "command": "mem-reprise" }]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [{ "type": "command", "command": "python3 ~/.claude/hooks/mem-voisins.py", "timeout": 90 }]
+      }
     ]
   }
 }

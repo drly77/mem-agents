@@ -12,6 +12,7 @@ comptée dans `mem etat`, sans son contenu.
     mem ajouter --type project "titre" < texte
     mem indexer | mem etat
     mem perimes [--depot D] [--dans project/]   (renvois morts : chemin, fichier, commit, note de l'index)
+    mem voisins NOTE   (notes qui disent déjà la même chose ; code 1 s'il y en a)
     mem doublons [--seuil 0.88] [--dans feedback/]   (notes qui se répètent ou se contredisent)
     mem selftest   (lignes pièges du filtre de secrets et des commandes, dans une mémoire jetable)
     mem verifier-perte AVANT APRES
@@ -884,13 +885,22 @@ def slug(titre: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s).strip("-")[:60] or "note"
 
 
-def ajouter(racine: Path, type_: str, titre: str, texte: str) -> Path:
+def ajouter(racine: Path, type_: str, titre: str, texte: str, base: Path | None = None, quand_meme: bool = False) -> Path:
     titre = titre.strip()
     if not titre or "\n" in titre or "\r" in titre:
         raise SystemExit("mem : le titre tient sur une seule ligne, non vide")
     for l in [titre, *texte.splitlines()]:
         if motif_secret(l) or DEBUT_BLOC.search(l):
             raise SystemExit(f"mem : refusé, une ligne ressemble à un secret ({motif_secret(l) or 'bloc de clé'})")
+    if base is not None and not quand_meme and sens_actif():
+        # Une note qui redit une note existante : refusée, l'agent complète plutôt celle-là (--quand-meme sinon).
+        morceaux = [m.strip() for m in re.split(r"\n\s*\n", texte) if len(m.strip()) >= DOUBLONS_MIN][:SENS_LOT]
+        q = vecteurs([f"{titre}\n{m}"[:2000] for m in morceaux] or [titre], delai=20)
+        trouves = notes_voisines(racine, base, q=q, seuil=VOISINS_SEUIL) if q else None
+        if trouves:
+            raise SystemExit("mem ajouter : refusé, des notes disent déjà presque la même chose :\n"
+                             + "\n".join(f"  {f}:{l}  ({c:.2f})  {x}" for f, c, l, x in trouves)
+                             + "\nCompléter l'une d'elles ; ou, si le sujet est vraiment autre, relancer avec --quand-meme.")
     dossier = racine / type_
     dossier.mkdir(parents=True, exist_ok=True)
     chemin = dossier / f"{slug(titre)}.md"
@@ -983,6 +993,7 @@ def verifier_perte(avant: Path, apres: Path) -> int:
 
 
 DOUBLONS_SEUIL = 0.88  # cosinus ; réglé sur la mémoire du laptop (0,85 : encore juste ; 0,88 : presque aucun faux)
+VOISINS_SEUIL = 0.85   # une seule note neuve, simple avis : un peu plus large (0,85-0,88 : encore de vraies redites)
 DOUBLONS_MIN = 40      # caractères : en dessous, un titre seul (« ## Production ») ressemble à tout
 
 
@@ -1003,30 +1014,98 @@ def paires_proches(fichiers: list[str], m, seuil: float) -> dict:
     return {c: sorted(v, reverse=True) for c, v in paires.items()}
 
 
+def meilleurs_par_note(fichiers: list[str], m, q, seuil: float, n: int = 3) -> list[tuple[str, float, int]]:
+    """Notes les plus proches d'un texte : pour chaque note, son passage le plus proche de l'un des vecteurs q
+    (cosinus ≥ seuil). [(fichier, cosinus, indice du passage)], du plus proche au moins proche, n au plus."""
+    import numpy as np
+
+    cos = (m @ np.asarray(q, dtype=np.float32).T).max(axis=1)
+    meilleur: dict[str, tuple[float, int]] = {}
+    for i in np.nonzero(cos >= seuil)[0]:
+        c = float(cos[i])
+        if c > meilleur.get(fichiers[i], (-1.0, 0))[0]:
+            meilleur[fichiers[i]] = (c, int(i))
+    return sorted(((f, c, i) for f, (c, i) in meilleur.items()), key=lambda t: -t[1])[:n]
+
+
+def passages_compares(con, base: Path) -> list:
+    """Passages qu'on compare pour les doublons : hors archives et MEMORY.md, assez longs, avec vecteur."""
+    con.execute("ATTACH DATABASE ? AS c", (f"file:{base_sens(base)}?mode=ro",))
+    return [r for r in con.execute(
+        "SELECT p.fichier, p.ligne, p.texte, c.v.v FROM passages p JOIN sens s ON s.rowid = p.rowid "
+        "JOIN c.v ON c.v.h = s.h WHERE p.type NOT IN ('archive', 'index')")
+        if len(r[2]) >= DOUBLONS_MIN and Path(r[0]).name != "MEMORY.md"]
+
+
+def sens_pret(base: Path, qui: str) -> bool:
+    if not sens_actif():
+        print(f"{qui} : il faut la recherche par le sens (MEM_SENS, Ollama local)", file=sys.stderr)
+        return False
+    try:
+        import numpy  # noqa: F401
+    except ImportError:
+        print(f"{qui} : numpy absent", file=sys.stderr)
+        return False
+    if not base_sens(base).exists():
+        print(f"{qui} : aucun vecteur ({raison_sens()})", file=sys.stderr)
+        return False
+    return True
+
+
+def notes_voisines(racine: Path, base: Path, q=None, note: str | None = None,
+                   seuil: float = DOUBLONS_SEUIL) -> list[tuple[str, float, int, str]] | None:
+    """Notes proches d'une note de la mémoire (ses passages indexés) ou de vecteurs q déjà calculés.
+    [(fichier, cosinus, ligne, extrait)] ; None si le sens n'est pas disponible."""
+    import numpy as np
+
+    assurer_index(racine, base)
+    con = sqlite3.connect(f"file:{base}?mode=ro", uri=True)
+    try:
+        lignes = passages_compares(con, base)
+    finally:
+        con.close()
+    if note is not None:
+        q = [np.frombuffer(r[3], dtype=np.float32) for r in lignes if r[0] == note]
+        lignes = [r for r in lignes if r[0] != note]
+    if q is None or not len(q) or not lignes:
+        return [] if q is not None and len(q) else None
+    m = np.frombuffer(b"".join(r[3] for r in lignes), dtype=np.float32).reshape(len(lignes), -1)
+    return [(f, c, lignes[i][1], " ".join(lignes[i][2].split())[:110])
+            for f, c, i in meilleurs_par_note([r[0] for r in lignes], m, q, seuil)]
+
+
+def voisins(racine: Path, base: Path, cible: str, seuil: float = VOISINS_SEUIL) -> int:
+    """Avant de garder une note neuve : les notes qui disent déjà la même chose. Code 1 s'il y en a."""
+    note = normaliser_dans(racine, cible)
+    if not note or note.endswith("/"):
+        print(f"mem voisins : « {cible} » n'est pas une note de {racine}", file=sys.stderr)
+        return 2
+    if not sens_pret(base, "mem voisins"):
+        return 2
+    trouves = notes_voisines(racine, base, note=note, seuil=seuil)
+    if trouves is None:
+        print(f"mem voisins : {note} n'a pas encore de vecteur ({raison_sens()})", file=sys.stderr)
+        return 2
+    for f, c, ligne, extrait in trouves:
+        print(f"{f}:{ligne}  ({c:.2f})  {extrait}")
+    return 1 if trouves else 0
+
+
 def doublons(racine: Path, base: Path, seuil: float = DOUBLONS_SEUIL, n: int = 20, dans: str | None = None) -> int:
     """Notes qui se répètent (ou se contredisent) : paires de passages très proches par le sens, dans deux notes
     différentes, regroupées par paire de notes. Hors archives (elles reprennent les notes par construction) et
     MEMORY.md, à la racine comme dans un sous-dossier (il résume les notes). Ne change rien : c'est à l'agent de fusionner ou de trancher."""
     assurer_index(racine, base)
-    if not sens_actif():
-        print("mem doublons : il faut la recherche par le sens (MEM_SENS, Ollama local)", file=sys.stderr)
+    if not sens_pret(base, "mem doublons"):
         return 2
-    try:
-        import numpy as np
-    except ImportError:
-        print("mem doublons : numpy absent", file=sys.stderr)
-        return 2
-    if not base_sens(base).exists():
-        print(f"mem doublons : aucun vecteur ({raison_sens()})", file=sys.stderr)
-        return 2
+    import numpy as np
+
     con = sqlite3.connect(f"file:{base}?mode=ro", uri=True)
     try:
-        con.execute("ATTACH DATABASE ? AS c", (f"file:{base_sens(base)}?mode=ro",))
+        lignes = passages_compares(con, base)  # un MEMORY.md de sous-dossier est exclu aussi
+        if dans:
+            lignes = [r for r in lignes if (r[0].startswith(dans) if dans.endswith("/") else r[0] == dans)]
         clause, args = filtre_dans(dans, "p.fichier")
-        lignes = [r for r in con.execute(
-            "SELECT p.fichier, p.ligne, p.texte, c.v.v FROM passages p JOIN sens s ON s.rowid = p.rowid "
-            "JOIN c.v ON c.v.h = s.h WHERE p.type NOT IN ('archive', 'index')" + clause, args)
-            if len(r[2]) >= DOUBLONS_MIN and Path(r[0]).name != "MEMORY.md"]  # un MEMORY.md de sous-dossier aussi
         total = sum(Path(f).name != "MEMORY.md" for (f,) in con.execute(
             "SELECT p.fichier FROM passages p WHERE p.type NOT IN ('archive', 'index')" + clause, args))
     finally:
@@ -1297,6 +1376,16 @@ def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: st
     ancien = f"ancien point archivé dans {archive_rel} ({len(corps)} octets)" if corps.strip() else "premier point"
     print(f"point de reprise : {note_rel} ({len(nouvelle_note)} octets) ; {ancien} ; aucune ligne perdue"
           + (f" ; commit {commit}" if commit else ""))
+    # Avis, jamais un refus : le point neuf renvoie-t-il à ce qui n'existe plus ici (chemin, fichier, commit) ?
+    try:
+        morts = renvois_morts(racine, depots_connus(racine), dans=note_rel)[0].get(note_rel, [])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        morts = []
+    if morts:
+        print(f"à vérifier : {len(morts)} renvoi(s) du point introuvable(s) ici (VPS, VM ou autre dépôt : normal ;"
+              " sinon corriger la note) :")
+        for ligne, genre, renvoi in morts:
+            print(f"    {note_rel}:{ligne}  {genre:<8} {renvoi}")
     return 0
 
 def bench(racine: Path, base: Path, fichier: Path, n: int = 10) -> int:
@@ -1379,6 +1468,9 @@ def selftest() -> int:
             m = np.array([[1, 0, 0], [0.99, 0.141, 0], [1, 0, 0], [0, 1, 0], [0, 0.995, 0.0999]], dtype=np.float32)
             m /= np.linalg.norm(m, axis=1, keepdims=True)
             pp = paires_proches(["a.md", "b.md", "a.md", "c.md", "d.md"], m, 0.95)
+            mv = meilleurs_par_note(["a.md", "b.md", "a.md", "c.md", "d.md"], m, m[:1], 0.95)
+            cas("voisins : une ligne par note (son meilleur passage), du plus proche au moins proche",
+                [f for f, _, _ in mv] == ["a.md", "b.md"] and mv[0][2] in (0, 2))
             cas("doublons : paires de notes, passages d'une même note ignorés, tri du plus proche",
                 set(pp) == {("a.md", "b.md"), ("c.md", "d.md")} and len(pp[("a.md", "b.md")]) == 2
                 and pp[("a.md", "b.md")][0][0] >= pp[("a.md", "b.md")][1][0] - 1e-6)
@@ -1420,6 +1512,12 @@ def selftest() -> int:
             cas("perimes : ligne de MEMORY.md vers une note absente",
                 index_m == [("MEMORY.md", 2, "project/partie.md")])
             cas("perimes : lien [[…]] sans note compté à part", set(liens) == {"a-ecrire"})
+            pt = Path(tmp) / "pt.md"
+            pt.write_text("## POINT DE REPRISE 14/11 10h00\n- journal : ~/nexiste-pas-mem-selftest/j.log\n", encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                rc = point(mp, str(pt), "project/p.md", "archive/p.md", fichier_verrou=Path(tmp) / "vpt")
+            cas("point : avis des renvois introuvables du point neuf, sans refus",
+                rc == 0 and "à vérifier : 1 renvoi" in out.getvalue() and "~/nexiste-pas-mem-selftest/j.log" in out.getvalue())
         else:
             print("(sauté : perimes, git absent)")
 
@@ -1637,6 +1735,10 @@ def main(argv=None) -> int:
     a = sub.add_parser("ajouter", parents=[commun])
     a.add_argument("--type", required=True, choices=["user", "feedback", "project", "reference"])
     a.add_argument("titre")
+    a.add_argument("--quand-meme", action="store_true", help="écrire même si une note proche existe déjà")
+    vs = sub.add_parser("voisins", parents=[commun], help="notes proches d'une note (doublon avant de la garder)")
+    vs.add_argument("note")
+    vs.add_argument("--seuil", type=float, default=VOISINS_SEUIL)
     sub.add_parser("indexer", parents=[commun])
     sub.add_parser("etat", parents=[commun])
     per = sub.add_parser("perimes", parents=[commun], help="notes qui renvoient à ce qui n'existe plus")
@@ -1703,7 +1805,9 @@ def main(argv=None) -> int:
     elif args.cmd == "voir":
         return voir(racine, base, args.cible)
     elif args.cmd == "ajouter":
-        print(ajouter(racine, args.type, args.titre, sys.stdin.read()))
+        print(ajouter(racine, args.type, args.titre, sys.stdin.read(), base, args.quand_meme))
+    elif args.cmd == "voisins":
+        return voisins(racine, base, args.note, args.seuil)
     elif args.cmd == "indexer":
         total, refus = indexer(racine, base)
         print(f"{total} passages indexés, {refus} lignes refusées")

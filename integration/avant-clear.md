@@ -13,4 +13,5 @@ La session va être vidée (/clear) ou compactée (/compact). Prépare ta repris
    - une section `### À FAIRE EN PREMIER après le /clear ou le /compact` : les commandes à relancer, les vérifications à refaire.
    Tout ce qui n'est pas dans ce point sera perdu au /clear (un /compact n'en garde qu'un résumé). Jamais de secret : `mem point` refuse une ligne qui en a l'air.
 3. `mem point <fichier>` : l'ancien point part mot pour mot dans `archive/point-de-reprise.md` (ou `$MEM_POINT_ARCHIVE`), le contrôle de perte vérifie qu'aucune ligne n'a disparu, et le dossier mémoire est commité s'il est un dépôt git. S'il refuse, rien n'est changé : corrige et relance.
+   S'il affiche « à vérifier » (renvois du point introuvables sur cette machine) : ce qui vit ailleurs (serveur, VM, autre dépôt) reste tel quel ; un chemin, un fichier ou un commit qui n'existe vraiment plus, corrige sa ligne dans la note, puis commite-la.
 4. Dis en une ligne que tu es prêt (taille du point, commit éventuel).
