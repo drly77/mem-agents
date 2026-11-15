@@ -19,7 +19,8 @@ The notes stay the only source of truth: `mem` only keeps an index, rebuilt when
 No text leaves the machine.
 
 Every command and option has an English name (below) and a French one (`mem chercher`, `--vite`…):
-both work. Help and messages are in French.
+both work. Help and messages follow your locale (French if `LANG` starts with `fr`, English otherwise);
+`MEM_LANG=en` or `MEM_LANG=fr` forces one.
 
 ```
 mem search "who is allowed to deploy?"       # search
@@ -218,6 +219,7 @@ visible. The only reliable rule: do not write secrets into agent memory.
 | Variable | Purpose |
 |---|---|
 | `MEM_DIR` | memory directory |
+| `MEM_LANG` | `en` or `fr`: language of help and messages (default: from `LC_ALL`, `LC_MESSAGES`, `LANG`; English) |
 | `MEM_DB` | index database (default `~/.local/share/mem/<project>.db`, mode 0600) |
 | `MEM_SENS=0` | no search by meaning |
 | `MEM_SENS_URL` | Ollama endpoint (`http://127.0.0.1:11434/api/embed`) |

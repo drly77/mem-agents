@@ -35,7 +35,7 @@ ESSAI='{"q":"où est la clé ?","docs":["la clé est sous le paillasson","il ple
 if unshare -rn true 2>/dev/null; then
   (cd "$DEST" && echo "$ESSAI" | unshare -rn "$NODE" reclasser.mjs) && echo
 else
-  echo "unshare -rn refusé (espaces de noms non privilégiés bloqués) : mem lancera le reclasseur sans lui" >&2
+  echo "unshare -rn refusé (espaces de noms non privilégiés bloqués) : mem lancera le reclasseur sans lui / unshare -rn refused (unprivileged namespaces blocked): mem will run the reranker without it" >&2
   (cd "$DEST" && echo "$ESSAI" | "$NODE" reclasser.mjs) && echo
 fi
 

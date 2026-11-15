@@ -22,6 +22,7 @@ comptée dans `mem etat`, sans son contenu.
 Noms anglais (mêmes commandes) : search, show, add, index, status, stale, neighbors,
 duplicates, handover, check-loss ; --dir, --fast, --in, --all, --since, --anyway, --threshold,
 --repo, --author.
+Langue de l'aide et des messages : $MEM_LANG (fr, en), sinon la locale ; anglais par défaut.
 
 Dossier : --dossier, sinon $MEM_DIR, sinon la mémoire Claude Code du dossier
 courant ou de l'un de ses parents (racine git commune comprise, pour les
@@ -52,6 +53,23 @@ import tempfile
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+
+def langue() -> str:
+    """« fr » ou « en » : MEM_LANG, sinon la locale (LC_ALL, LC_MESSAGES, LANG) ; anglais par défaut."""
+    choix = os.environ.get("MEM_LANG", "").strip().lower()[:2]
+    if choix in ("fr", "en"):
+        return choix
+    for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        if os.environ.get(var):
+            return "fr" if os.environ[var].lower().startswith("fr") else "en"
+    return "en"
+
+
+def tr(fr: str, en: str) -> str:
+    """Le message dans la langue de l'utilisateur ; les deux textes restent côte à côte dans le code."""
+    return fr if langue() == "fr" else en
+
 
 TAILLE_MAX = 1500  # au-delà, un passage est recoupé à la ligne vide suivante
 PAR_FICHIER = 2  # au plus deux passages d'un même fichier dans les résultats
@@ -162,7 +180,8 @@ def _synonymes_perso() -> list[set[str]]:
         lignes = Path(os.environ.get("MEM_SYNONYMES") or defaut).read_text(encoding="utf-8").splitlines()
     except (OSError, ValueError) as e:  # ValueError : fichier pas en UTF-8 ; mem doit marcher quand même
         if not isinstance(e, FileNotFoundError):
-            print(f"mem : synonymes ignorés ({type(e).__name__})", file=sys.stderr)
+            print(tr(f"mem : synonymes ignorés ({type(e).__name__})", f"mem: synonyms ignored ({type(e).__name__})"),
+                  file=sys.stderr)
         return []
     groupes = ({m.strip().lower() for m in l.split(",") if m.strip()} for l in lignes if not l.lstrip().startswith("#"))
     return [g for g in groupes if len(g) > 1]
@@ -254,6 +273,26 @@ def base_par_defaut(dossier: Path) -> Path:
     if os.environ.get("MEM_DB"):
         return Path(os.environ["MEM_DB"]).expanduser()
     return _donnees(dossier, ".db")
+
+
+MOTIFS_EN = {"clé privée": "private key", "jeton": "token", "url à identifiants": "URL with credentials",
+             "mot de passe": "password", "corps de clé": "key body", "variable secrète": "secret variable",
+             "clé base64": "base64 key", "valeur aléatoire": "random value", "bloc de clé": "key block",
+             "bloc de clé sans END : fermé avant cette ligne": "key block without END: closed before this line"}
+MASQUEE = " : valeur masquée"
+GENRES_EN = {"chemin": "path", "fichier": "file"}
+
+
+def motif_lisible(motif: str) -> str:
+    if langue() == "fr":
+        return motif
+    suffixe = " (value masked)" if motif.endswith(MASQUEE) else ""
+    motif = motif.removesuffix(MASQUEE)
+    return MOTIFS_EN.get(motif, motif) + suffixe
+
+
+def genre_lisible(genre: str) -> str:
+    return genre if langue() == "fr" else GENRES_EN.get(genre, genre)
 
 
 def motif_secret(ligne: str) -> str | None:
@@ -395,7 +434,7 @@ def decouper(chemin: Path, racine: Path):
             continue
         texte, motif = masquer(l)
         if motif:
-            refus.append((rel, n, motif + (" : valeur masquée" if texte is not None else "")))
+            refus.append((rel, n, motif + (MASQUEE if texte is not None else "")))
             if texte is None:
                 continue
             l = texte
@@ -433,10 +472,13 @@ def raison_sens() -> str:
             modeles = [m.get("name", "") for m in json.load(r).get("models", [])]
     except (OSError, ValueError):  # réseau, délai, URL mal formée (InvalidURL), JSON illisible ; un bogue d'ici
         # plante bruyamment au lieu d'un faux diagnostic
-        return f"Ollama injoignable ou adresse invalide ({base}) : vérifier MEM_SENS_URL, démarrer Ollama"
+        return tr(f"Ollama injoignable ou adresse invalide ({base}) : vérifier MEM_SENS_URL, démarrer Ollama",
+                  f"Ollama unreachable or invalid address ({base}): check MEM_SENS_URL, start Ollama")
     if not any(m.split(":")[0] == SENS_MODELE.split(":")[0] for m in modeles):
-        return f"modèle {SENS_MODELE} absent : « ollama pull {SENS_MODELE} »"
-    return "Ollama répond : le calcul a sans doute été interrompu"
+        return tr(f"modèle {SENS_MODELE} absent : « ollama pull {SENS_MODELE} »",
+                  f"model {SENS_MODELE} missing: \"ollama pull {SENS_MODELE}\"")
+    return tr("Ollama répond : le calcul a sans doute été interrompu",
+              "Ollama answers: the computation was probably interrupted")
 
 
 def vecteurs(textes: list[str], delai: float = SENS_DELAI) -> list | None:
@@ -482,7 +524,8 @@ def calculer_sens(con: sqlite3.Connection, base: Path) -> None:
         for i in range(0, len(a_faire), SENS_LOT):
             lot = a_faire[i:i + SENS_LOT]
             if sys.stderr.isatty() and len(a_faire) > SENS_LOT:
-                print(f"\rmem : sens, {i}/{len(a_faire)} passages…", end="", file=sys.stderr, flush=True)
+                print(tr(f"\rmem : sens, {i}/{len(a_faire)} passages…", f"\rmem: embeddings, {i}/{len(a_faire)} passages…"),
+                      end="", file=sys.stderr, flush=True)
             vs = vecteurs([f"{t}\n{x}"[:2000] for _, t, x in lot])
             if vs is None:
                 break  # Ollama absent : les passages restants seront faits à la prochaine réindexation
@@ -531,7 +574,8 @@ def indexer(racine: Path, base: Path, si_perime: bool = False) -> tuple[int, int
         try:
             fcntl.flock(verrou, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            print("mem : index en cours de réfection par un autre agent, attente…", file=sys.stderr, flush=True)
+            print(tr("mem : index en cours de réfection par un autre agent, attente…",
+                     "mem: index being rebuilt by another agent, waiting…"), file=sys.stderr, flush=True)
             fcntl.flock(verrou, fcntl.LOCK_EX)
         if si_perime and empreinte_de_la_base(base) == empreinte(racine):
             return 0, 0  # refait entre-temps par un autre agent
@@ -602,7 +646,7 @@ def termes_de(mots: str) -> list[str]:
         mots = mots.replace(expr, mot)
     termes = [t for t in re.findall(r"\w+(?:-\w+)+|\w+", mots) if t not in MOTS_VIDES | RECENT]
     if not termes:
-        raise SystemExit("mem : rien à chercher")
+        raise SystemExit(tr("mem : rien à chercher", "mem: nothing to search for"))
     return termes
 
 
@@ -806,7 +850,8 @@ def reclasser(question: str, resultats: list) -> list:
         if len(notes) != len(tete) or not all(isinstance(x, (int, float)) for x in notes):
             raise ValueError("réponse inattendue")
     except (OSError, ValueError, subprocess.SubprocessError) as e:
-        print(f"mem : reclassement indisponible ({type(e).__name__}), classement par mots et sens", file=sys.stderr)
+        print(tr(f"mem : reclassement indisponible ({type(e).__name__}), classement par mots et sens",
+                 f"mem: reranking unavailable ({type(e).__name__}), ranked by words and meaning"), file=sys.stderr)
         return resultats
     ordre = sorted(range(len(tete)), key=lambda i: -notes[i])  # tri stable
     return [tete[i] for i in ordre] + reste
@@ -855,7 +900,7 @@ def proches(con, base: Path, question: str, archives, type_, depuis, auteur, jou
 
 def afficher(resultats):
     if not resultats:
-        print("aucun résultat")
+        print(tr("aucun résultat", "no results"))
         return
     for fichier, ligne, date, type_, titre, texte, _ in resultats:
         print(f"{fichier}:{ligne}  [{type_}] {date}  {titre}")
@@ -867,7 +912,8 @@ def afficher(resultats):
 def voir(racine: Path, base: Path, cible: str) -> int:
     fichier, _, ligne = cible.rpartition(":")
     if not fichier or not ligne.isdigit():
-        raise SystemExit("mem : usage : mem voir <fichier>:<ligne>  (ex. project/note.md:12)")
+        raise SystemExit(tr("mem : usage : mem voir <fichier>:<ligne>  (ex. project/note.md:12)",
+                              "mem: usage: mem show <file>:<line>  (e.g. project/note.md:12)"))
     assurer_index(racine, base)
     con = sqlite3.connect(f"file:{base}?mode=ro", uri=True)
     row = con.execute(
@@ -876,7 +922,7 @@ def voir(racine: Path, base: Path, cible: str) -> int:
     ).fetchone()
     con.close()
     if not row:
-        print(f"mem : {cible} introuvable dans l'index", file=sys.stderr)
+        print(tr(f"mem : {cible} introuvable dans l'index", f"mem: {cible} not found in the index"), file=sys.stderr)
         return 1
     print(row[0])
     return 0
@@ -892,19 +938,24 @@ def slug(titre: str) -> str:
 def ajouter(racine: Path, type_: str, titre: str, texte: str, base: Path | None = None, quand_meme: bool = False) -> Path:
     titre = titre.strip()
     if not titre or "\n" in titre or "\r" in titre:
-        raise SystemExit("mem : le titre tient sur une seule ligne, non vide")
+        raise SystemExit(tr("mem : le titre tient sur une seule ligne, non vide",
+                              "mem: the title must fit on a single, non-empty line"))
     for l in [titre, *texte.splitlines()]:
         if motif_secret(l) or DEBUT_BLOC.search(l):
-            raise SystemExit(f"mem : refusé, une ligne ressemble à un secret ({motif_secret(l) or 'bloc de clé'})")
+            motif = motif_lisible(motif_secret(l) or "bloc de clé")
+            raise SystemExit(tr(f"mem : refusé, une ligne ressemble à un secret ({motif})",
+                                f"mem: refused, a line looks like a secret ({motif})"))
     if base is not None and not quand_meme and sens_actif():
         # Une note qui redit une note existante : refusée, l'agent complète plutôt celle-là (--quand-meme sinon).
         morceaux = [m.strip() for m in re.split(r"\n\s*\n", texte) if len(m.strip()) >= DOUBLONS_MIN][:SENS_LOT]
         q = vecteurs([f"{titre}\n{m}"[:2000] for m in morceaux] or [titre], delai=20)
         trouves = notes_voisines(racine, base, q=q, seuil=VOISINS_SEUIL) if q else None
         if trouves:
-            raise SystemExit("mem ajouter : refusé, des notes disent déjà presque la même chose :\n"
+            raise SystemExit(tr("mem ajouter : refusé, des notes disent déjà presque la même chose :\n",
+                                "mem add: refused, some notes already say nearly the same thing:\n")
                              + "\n".join(f"  {f}:{l}  ({c:.2f})  {x}" for f, c, l, x in trouves)
-                             + "\nCompléter l'une d'elles ; ou, si le sujet est vraiment autre, relancer avec --quand-meme.")
+                             + tr("\nCompléter l'une d'elles ; ou, si le sujet est vraiment autre, relancer avec --quand-meme.",
+                                  "\nComplete one of them; or, if the subject really is different, run again with --anyway."))
     dossier = racine / type_
     dossier.mkdir(parents=True, exist_ok=True)
     chemin = dossier / f"{slug(titre)}.md"
@@ -918,30 +969,40 @@ def ajouter(racine: Path, type_: str, titre: str, texte: str, base: Path | None 
             return essai
         except FileExistsError:
             continue
-    raise SystemExit(f"mem : {chemin} existe déjà (et sa variante datée)")
+    raise SystemExit(tr(f"mem : {chemin} existe déjà (et sa variante datée)",
+                        f"mem: {chemin} already exists (and so does its dated variant)"))
 
 
 def etat(racine: Path, base: Path):
     assurer_index(racine, base)
     con = sqlite3.connect(f"file:{base}?mode=ro", uri=True)
-    print(f"dossier : {racine}\nbase : {base}")
+    print(tr(f"dossier : {racine}\nbase : {base}", f"folder: {racine}\ndatabase: {base}"))
     total = con.execute("SELECT count(*) FROM passages").fetchone()[0]
-    print(f"notes : {len(notes(racine))}  passages : {total}")
+    print(tr(f"notes : {len(notes(racine))}  passages : {total}", f"notes: {len(notes(racine))}  passages: {total}"))
     avec = con.execute("SELECT count(*) FROM sens").fetchone()[0]
-    cause = ("" if sens_actif() else ", désactivé (MEM_SENS=0)" if os.environ.get("MEM_SENS", "1") == "0"
-             else f", désactivé (MEM_SENS_URL vise {urllib.parse.urlparse(SENS_URL).hostname}, pas cette machine)")
-    print(f"sens ({SENS_MODELE} local) : {avec} passages avec vecteur{cause}")
+    hote = urllib.parse.urlparse(SENS_URL).hostname
+    cause = ("" if sens_actif() else tr(", désactivé (MEM_SENS=0)", ", disabled (MEM_SENS=0)")
+             if os.environ.get("MEM_SENS", "1") == "0"
+             else tr(f", désactivé (MEM_SENS_URL vise {hote}, pas cette machine)",
+                     f", disabled (MEM_SENS_URL points to {hote}, not this machine)"))
+    print(tr(f"sens ({SENS_MODELE} local) : {avec} passages avec vecteur{cause}",
+             f"meaning (local {SENS_MODELE}): {avec} passages with a vector{cause}"))
     if sens_actif() and avec < total:
-        print(f"  sens incomplet ({total - avec} sans vecteur) : {raison_sens()} ; puis « mem indexer »")
+        print(tr(f"  sens incomplet ({total - avec} sans vecteur) : {raison_sens()} ; puis « mem indexer »",
+                 f"  meaning incomplete ({total - avec} without a vector): {raison_sens()}; then \"mem index\""))
     for type_, nb in con.execute("SELECT type, count(*) FROM passages GROUP BY type ORDER BY 2 DESC"):
-        print(f"  {type_} : {nb}")
+        print(tr(f"  {type_} : {nb}", f"  {type_}: {nb}"))
     caches = [f for (f,) in con.execute("SELECT DISTINCT fichier FROM passages WHERE type = 'index' AND fichier != 'MEMORY.md'")]
     if caches:
-        print(f"notes racines sans type (classées index, hors recherche par défaut ; ajouter « type: » ou --type index) : {', '.join(caches)}")
+        print(tr(f"notes racines sans type (classées index, hors recherche par défaut ; ajouter « type: » ou --type index) : "
+                 f"{', '.join(caches)}",
+                 f"root notes without a type (filed as index, left out of default searches; add \"type:\" or --type index): "
+                 f"{', '.join(caches)}"))
     refus = con.execute("SELECT fichier, ligne, motif FROM refus ORDER BY fichier, ligne").fetchall()
-    print(f"lignes filtrées (secret probable : valeur masquée, ou ligne retirée) : {len(refus)}")
+    print(tr(f"lignes filtrées (secret probable : valeur masquée, ou ligne retirée) : {len(refus)}",
+             f"filtered lines (likely secret: value masked, or line removed): {len(refus)}"))
     for fichier, ligne, motif in refus:
-        print(f"  {fichier}:{ligne}  {motif}")
+        print(f"  {fichier}:{ligne}  {motif_lisible(motif)}")
     con.close()
 
 
@@ -955,12 +1016,14 @@ def verifier_perte(avant: Path, apres: Path) -> int:
     lignes de chaque note est conservé dans la note vivante suivie de ses archives (ou l'inverse).
     Code 2 si AVANT ou APRÈS n'est pas un dossier, ou si AVANT n'a aucune note : une faute de frappe ne passe
     jamais pour « rien de perdu »."""
-    for nom, d in (("AVANT", avant), ("APRÈS", apres)):
+    for nom, name, d in (("AVANT", "BEFORE", avant), ("APRÈS", "AFTER", apres)):
         if not d.is_dir():
-            print(f"mem verifier-perte : {nom} {d} n'est pas un dossier", file=sys.stderr)
+            print(tr(f"mem verifier-perte : {nom} {d} n'est pas un dossier", f"mem check-loss: {name} {d} is not a folder"),
+                  file=sys.stderr)
             return 2
     if not notes(avant):
-        print(f"mem verifier-perte : aucune note .md dans AVANT {avant}", file=sys.stderr)
+        print(tr(f"mem verifier-perte : aucune note .md dans AVANT {avant}", f"mem check-loss: no .md note in BEFORE {avant}"),
+              file=sys.stderr)
         return 2
 
     def lire(p: Path) -> list[str]:
@@ -976,7 +1039,7 @@ def verifier_perte(avant: Path, apres: Path) -> int:
     for r, ls in fichiers_apres.items():
         par_nom[Path(r).name].append(ls)
     compte_avant = collections.Counter()
-    problemes = []
+    problemes, desordre = [], 0
     for p in notes(avant):
         rel = str(p.relative_to(avant))
         lignes = lire(p)
@@ -985,13 +1048,15 @@ def verifier_perte(avant: Path, apres: Path) -> int:
         archives = [l for r, ls in archives_apres if Path(r).stem.startswith(p.stem) for l in ls]
         if not (est_sous_suite(lignes, vivant + archives) or est_sous_suite(lignes, archives + vivant)
                 or any(est_sous_suite(lignes, ls) for ls in par_nom[p.name])):
-            problemes.append(f"ordre ou contenu changé : {rel}")
+            problemes.append(tr(f"ordre ou contenu changé : {rel}", f"order or content changed: {rel}"))
+            desordre += 1
     manque = compte_avant - compte_apres
     for ligne, nb in list(manque.items())[:50]:
-        problemes.append(f"perdue ×{nb} : {ligne[:120]}")
+        problemes.append(tr(f"perdue ×{nb} : {ligne[:120]}", f"lost ×{nb}: {ligne[:120]}"))
     for x in problemes[:60]:
         print(x)
-    print(f"lignes perdues : {sum(manque.values())} ; notes en désordre : {sum(x.startswith('ordre') for x in problemes)}")
+    print(tr(f"lignes perdues : {sum(manque.values())} ; notes en désordre : {desordre}",
+             f"lost lines: {sum(manque.values())}; notes out of order: {desordre}"))
     return 1 if problemes else 0
 
 
@@ -1043,15 +1108,16 @@ def passages_compares(con, base: Path) -> list:
 
 def sens_pret(base: Path, qui: str) -> bool:
     if not sens_actif():
-        print(f"{qui} : il faut la recherche par le sens (MEM_SENS, Ollama local)", file=sys.stderr)
+        print(tr(f"{qui} : il faut la recherche par le sens (MEM_SENS, Ollama local)",
+                 f"{qui}: needs search by meaning (MEM_SENS, local Ollama)"), file=sys.stderr)
         return False
     try:
         import numpy  # noqa: F401
     except ImportError:
-        print(f"{qui} : numpy absent", file=sys.stderr)
+        print(tr(f"{qui} : numpy absent", f"{qui}: numpy missing"), file=sys.stderr)
         return False
     if not base_sens(base).exists():
-        print(f"{qui} : aucun vecteur ({raison_sens()})", file=sys.stderr)
+        print(tr(f"{qui} : aucun vecteur ({raison_sens()})", f"{qui}: no vectors ({raison_sens()})"), file=sys.stderr)
         return False
     return True
 
@@ -1082,13 +1148,15 @@ def voisins(racine: Path, base: Path, cible: str, seuil: float = VOISINS_SEUIL) 
     """Avant de garder une note neuve : les notes qui disent déjà la même chose. Code 1 s'il y en a."""
     note = normaliser_dans(racine, cible)
     if not note or note.endswith("/"):
-        print(f"mem voisins : « {cible} » n'est pas une note de {racine}", file=sys.stderr)
+        print(tr(f"mem voisins : « {cible} » n'est pas une note de {racine}",
+                 f"mem neighbors: \"{cible}\" is not a note in {racine}"), file=sys.stderr)
         return 2
-    if not sens_pret(base, "mem voisins"):
+    if not sens_pret(base, tr("mem voisins", "mem neighbors")):
         return 2
     trouves = notes_voisines(racine, base, note=note, seuil=seuil)
     if trouves is None:
-        print(f"mem voisins : {note} n'a pas encore de vecteur ({raison_sens()})", file=sys.stderr)
+        print(tr(f"mem voisins : {note} n'a pas encore de vecteur ({raison_sens()})",
+                 f"mem neighbors: {note} has no vector yet ({raison_sens()})"), file=sys.stderr)
         return 2
     for f, c, ligne, extrait in trouves:
         print(f"{f}:{ligne}  ({c:.2f})  {extrait}")
@@ -1100,7 +1168,7 @@ def doublons(racine: Path, base: Path, seuil: float = DOUBLONS_SEUIL, n: int = 2
     différentes, regroupées par paire de notes. Hors archives (elles reprennent les notes par construction) et
     MEMORY.md, à la racine comme dans un sous-dossier (il résume les notes). Ne change rien : c'est à l'agent de fusionner ou de trancher."""
     assurer_index(racine, base)
-    if not sens_pret(base, "mem doublons"):
+    if not sens_pret(base, tr("mem doublons", "mem duplicates")):
         return 2
     import numpy as np
 
@@ -1115,14 +1183,16 @@ def doublons(racine: Path, base: Path, seuil: float = DOUBLONS_SEUIL, n: int = 2
     finally:
         con.close()
     if not lignes:
-        print("aucun passage avec vecteur à comparer")
+        print(tr("aucun passage avec vecteur à comparer", "no passages with a vector to compare"))
         return 0
     m = np.frombuffer(b"".join(r[3] for r in lignes), dtype=np.float32).reshape(len(lignes), -1)
     paires = paires_proches([r[0] for r in lignes], m, seuil)
     ordre = sorted(paires.items(), key=lambda kv: (-len(kv[1]), -kv[1][0][0]))
     sans = total - len(lignes)
-    print(f"{len(paires)} paire(s) de notes proches (seuil {seuil:.2f} ; {len(lignes)} passages comparés"
-          + (f", {sans} trop courts ou sans vecteur" if sans else "") + ")")
+    print(tr(f"{len(paires)} paire(s) de notes proches (seuil {seuil:.2f} ; {len(lignes)} passages comparés"
+             + (f", {sans} trop courts ou sans vecteur" if sans else "") + ")",
+             f"{len(paires)} pair(s) of similar notes (threshold {seuil:.2f}; {len(lignes)} passages compared"
+             + (f", {sans} too short or without a vector" if sans else "") + ")"))
 
     def court(texte: str) -> str:
         t = " ".join(texte.split())
@@ -1132,13 +1202,16 @@ def doublons(racine: Path, base: Path, seuil: float = DOUBLONS_SEUIL, n: int = 2
         cos, i, j = liste[0]
         if lignes[i][0] != fa:
             i, j = j, i
-        print(f"\n{len(liste)} passage(s), jusqu'à {cos:.2f}  {fa}  ↔  {fb}")
+        print(tr(f"\n{len(liste)} passage(s), jusqu'à {cos:.2f}  {fa}  ↔  {fb}",
+                 f"\n{len(liste)} passage(s), up to {cos:.2f}  {fa}  ↔  {fb}"))
         print(f"    {fa}:{lignes[i][1]}  {court(lignes[i][2])}")
         print(f"    {fb}:{lignes[j][1]}  {court(lignes[j][2])}")
     if len(ordre) > n:
-        print(f"\n… {len(ordre) - n} autre(s) paire(s) : --n {len(ordre)}")
+        print(tr(f"\n… {len(ordre) - n} autre(s) paire(s) : --n {len(ordre)}",
+                 f"\n… {len(ordre) - n} more pair(s): --n {len(ordre)}"))
     if ordre:
-        print("\nÀ trancher note par note : fusionner (garder la plus juste), ou corriger celle qui contredit.")
+        print(tr("\nÀ trancher note par note : fusionner (garder la plus juste), ou corriger celle qui contredit.",
+                 "\nDecide note by note: merge (keep the most accurate one), or fix the one that contradicts."))
     return 0
 
 
@@ -1260,27 +1333,33 @@ def perimes(racine: Path, depots: list[Path] | None = None, n: int = 30, dans: s
     depots = depots_connus(racine, depots)
     morts, index_morts, liens = renvois_morts(racine, depots, dans)
     ordre = sorted(morts.items(), key=lambda kv: (-len(kv[1]), kv[0]))
-    print(f"{len(morts)} note(s) avec des renvois introuvables ici (hors archives ; dépôts : "
-          f"{', '.join(d.name for d in depots) or 'aucun'})")
+    liste_depots = ", ".join(d.name for d in depots)
+    print(tr(f"{len(morts)} note(s) avec des renvois introuvables ici (hors archives ; dépôts : {liste_depots or 'aucun'})",
+             f"{len(morts)} note(s) with references not found here (archives excluded; repositories: {liste_depots or 'none'})"))
     detail = 10**6 if dans and not dans.endswith("/") else 5  # une seule note demandée : tout son détail
     for rel, liste in ordre[:n]:
-        print(f"\n{rel} : {len(liste)}")
+        print(tr(f"\n{rel} : {len(liste)}", f"\n{rel}: {len(liste)}"))
         for ligne, genre, renvoi in liste[:detail]:
-            print(f"    :{ligne:<4} {genre:<8} {renvoi}")
+            print(f"    :{ligne:<4} {genre_lisible(genre):<8} {renvoi}")
         if len(liste) > detail:
-            print(f"    … {len(liste) - detail} de plus : --dans {rel}")
+            print(tr(f"    … {len(liste) - detail} de plus : --dans {rel}", f"    … {len(liste) - detail} more: --in {rel}"))
     if len(ordre) > n:
-        print(f"\n… {len(ordre) - n} autre(s) note(s) : --n {len(ordre)}")
+        print(tr(f"\n… {len(ordre) - n} autre(s) note(s) : --n {len(ordre)}",
+                 f"\n… {len(ordre) - n} more note(s): --n {len(ordre)}"))
     if index_morts:
-        print(f"\nIndex : {len(index_morts)} ligne(s) vers une note absente")
+        print(tr(f"\nIndex : {len(index_morts)} ligne(s) vers une note absente",
+                 f"\nIndex: {len(index_morts)} line(s) pointing to a missing note"))
         for rel, ligne, lien in index_morts:
             print(f"    {rel}:{ligne}  {lien}")
     if liens:
-        print(f"\nLiens [[…]] sans note ({len(liens)}, des notes à écrire, pas forcément une erreur) : "
+        print(tr(f"\nLiens [[…]] sans note ({len(liens)}, des notes à écrire, pas forcément une erreur) : ",
+                 f"\n[[…]] links without a note ({len(liens)}, notes still to write, not necessarily an error): ")
               + ", ".join(sorted(liens)))
     if morts or index_morts:
-        print("\nPour chaque renvoi : vérifier en direct, puis corriger la note (ou la passer en archive si elle"
-              " ne décrit plus que le passé).")
+        print(tr("\nPour chaque renvoi : vérifier en direct, puis corriger la note (ou la passer en archive si elle"
+                 " ne décrit plus que le passé).",
+                 "\nFor each reference: check live, then fix the note (or move it to the archive if it only describes"
+                 " the past)."))
     return 1 if morts or index_morts else 0
 
 
@@ -1300,15 +1379,18 @@ def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: st
     try:
         texte = (sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8")).strip() + "\n"
     except (OSError, UnicodeDecodeError) as e:
-        print(f"mem point : lecture impossible de {source} ({e.strerror or e})", file=sys.stderr)
+        print(tr(f"mem point : lecture impossible de {source} ({e.strerror or e})",
+                 f"mem handover: cannot read {source} ({e.strerror or e})"), file=sys.stderr)
         return 2
     if not texte.startswith("## POINT DE REPRISE"):
-        print("mem point : le point doit commencer par « ## POINT DE REPRISE »", file=sys.stderr)
+        print(tr("mem point : le point doit commencer par « ## POINT DE REPRISE »",
+                 "mem handover: the note must start with \"## POINT DE REPRISE\""), file=sys.stderr)
         return 2
     for i, l in enumerate(texte.splitlines(), 1):
         if motif_secret(l) or DEBUT_BLOC.search(l):
-            print(f"mem point : refusé, la ligne {i} ressemble à un secret ({motif_secret(l) or 'bloc de clé'})",
-                  file=sys.stderr)
+            motif = motif_lisible(motif_secret(l) or "bloc de clé")
+            print(tr(f"mem point : refusé, la ligne {i} ressemble à un secret ({motif})",
+                     f"mem handover: refused, line {i} looks like a secret ({motif})"), file=sys.stderr)
             return 2
     note, archive = racine / note_rel, racine / archive_rel
 
@@ -1325,13 +1407,16 @@ def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: st
     with open(fichier_verrou, "w") as verrou:
         fcntl.flock(verrou, fcntl.LOCK_EX)
         avant_note = note.read_text(encoding="utf-8") if note.exists() else (
-            f"---\nname: {Path(note_rel).stem}\ndescription: Dernier point de reprise (écrit avant /clear ou /compact)"
-            f"\nmetadata:\n  type: project\n---\n")
+            f"---\nname: {Path(note_rel).stem}\ndescription: "
+            + tr("Dernier point de reprise (écrit avant /clear ou /compact)",
+                 "Latest handover note (written before /clear or /compact)")
+            + "\nmetadata:\n  type: project\n---\n")
         avant_archive = archive.read_text(encoding="utf-8") if archive.exists() else ""
         tete, corps = couper(avant_note)
         nouvelle_archive = avant_archive
         if corps.strip():
-            entete = f"# Points de reprise archivés{' de ' + auteur if auteur else ''}\n"
+            entete = tr(f"# Points de reprise archivés{' de ' + auteur if auteur else ''}\n",
+                        f"# Archived handover notes{' of ' + auteur if auteur else ''}\n")
             nouvelle_archive = (nouvelle_archive or entete).rstrip("\n") + "\n\n" + corps
         nouvelle_note = tete.rstrip("\n") + "\n\n" + texte
         with tempfile.TemporaryDirectory(prefix="mem-point-") as tmp:
@@ -1344,7 +1429,8 @@ def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: st
             with contextlib.redirect_stdout(sortie):
                 perte = verifier_perte(avant, apres)
             if perte:
-                print("mem point : verifier-perte refuse, rien n'est changé\n" + sortie.getvalue(), file=sys.stderr)
+                print(tr("mem point : verifier-perte refuse, rien n'est changé\n",
+                         "mem handover: check-loss refuses, nothing changed\n") + sortie.getvalue(), file=sys.stderr)
                 return 1
         archive.parent.mkdir(parents=True, exist_ok=True)
         note.parent.mkdir(parents=True, exist_ok=True)
@@ -1372,24 +1458,34 @@ def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: st
             subprocess.run(["git", "-C", str(racine), "add", str(note), str(archive)], check=False)
             # « -- note archive » : le commit n'emporte que ces deux fichiers, jamais ce qui était déjà indexé.
             r = subprocess.run(["git", "-C", str(racine), "commit", "-q", "-m",
-                                f"{auteur or 'mem point'} : point de reprise archivé, point neuf", "--", str(note), str(archive)],
+                                tr(f"{auteur or 'mem point'} : point de reprise archivé, point neuf",
+                                   f"{auteur or 'mem handover'}: handover note archived, new one written"),
+                                "--", str(note), str(archive)],
                                capture_output=True, text=True)
             if r.returncode == 0:
                 commit = subprocess.run(["git", "-C", str(racine), "rev-parse", "--short", "HEAD"],
                                         capture_output=True, text=True).stdout.strip()
-    ancien = f"ancien point archivé dans {archive_rel} ({len(corps)} octets)" if corps.strip() else "premier point"
-    print(f"point de reprise : {note_rel} ({len(nouvelle_note)} octets) ; {ancien} ; aucune ligne perdue"
-          + (f" ; commit {commit}" if commit else ""))
+    if corps.strip():
+        ancien = tr(f"ancien point archivé dans {archive_rel} ({len(corps)} octets)",
+                    f"previous note archived in {archive_rel} ({len(corps)} bytes)")
+    else:
+        ancien = tr("premier point", "first note")
+    print(tr(f"point de reprise : {note_rel} ({len(nouvelle_note)} octets) ; {ancien} ; aucune ligne perdue"
+             + (f" ; commit {commit}" if commit else ""),
+             f"handover note: {note_rel} ({len(nouvelle_note)} bytes); {ancien}; no line lost"
+             + (f"; commit {commit}" if commit else "")))
     # Avis, jamais un refus : le point neuf renvoie-t-il à ce qui n'existe plus ici (chemin, fichier, commit) ?
     try:
         morts = renvois_morts(racine, depots_connus(racine), dans=note_rel)[0].get(note_rel, [])
     except (OSError, ValueError, subprocess.SubprocessError):
         morts = []
     if morts:
-        print(f"à vérifier : {len(morts)} renvoi(s) du point introuvable(s) ici (VPS, VM ou autre dépôt : normal ;"
-              " sinon corriger la note) :")
+        print(tr(f"à vérifier : {len(morts)} renvoi(s) du point introuvable(s) ici (VPS, VM ou autre dépôt : normal ;"
+                 " sinon corriger la note) :",
+                 f"to check: {len(morts)} reference(s) in the note not found here (another server, VM or repository:"
+                 " expected; otherwise fix the note):"))
         for ligne, genre, renvoi in morts:
-            print(f"    {note_rel}:{ligne}  {genre:<8} {renvoi}")
+            print(f"    {note_rel}:{ligne}  {genre_lisible(genre):<8} {renvoi}")
     return 0
 
 def bench(racine: Path, base: Path, fichier: Path, n: int = 10) -> int:
@@ -1399,28 +1495,32 @@ def bench(racine: Path, base: Path, fichier: Path, n: int = 10) -> int:
     try:
         texte = fichier.read_text(encoding="utf-8")
     except (OSError, ValueError) as e:  # absent, illisible, pas en UTF-8 : message et code 2, comme mem point
-        print(f"mem bench : lecture impossible de {fichier} ({getattr(e, 'strerror', None) or e})", file=sys.stderr)
+        raison = getattr(e, "strerror", None) or e
+        print(tr(f"mem bench : lecture impossible de {fichier} ({raison})", f"mem bench: cannot read {fichier} ({raison})"),
+              file=sys.stderr)
         return 2
     for l in texte.splitlines():
         if l.strip() and not l.startswith("#"):
             q, _, attendues = l.partition("\t")
             questions.append((q.strip(), {a.strip() for a in attendues.split(",") if a.strip()}))
     if not questions:
-        raise SystemExit(f"mem : aucune question dans {fichier}")
+        raise SystemExit(tr(f"mem : aucune question dans {fichier}", f"mem: no questions in {fichier}"))
     absentes = sorted({a for _, att in questions for a in att if not (racine / a).is_file()})
     for a in absentes:
-        print(f"note attendue introuvable : {a}")
+        print(tr(f"note attendue introuvable : {a}", f"expected note not found: {a}"))
     rangs = []
     for q, attendues in questions:
         fichiers = [r[0] for r in chercher(racine, base, q, n)]
         rang = next((i for i, f in enumerate(fichiers, start=1) if f in attendues), None)
         rangs.append(rang)
-        print(f"{rang or '-':>2}  {q}" + ("" if rang and rang <= 3 else f"   (en tête : {fichiers[0] if fichiers else 'rien'})"))
+        tete = fichiers[0] if fichiers else tr("rien", "nothing")
+        print(f"{rang or '-':>2}  {q}" + ("" if rang and rang <= 3 else tr(f"   (en tête : {tete})", f"   (top: {tete})")))
     nb = len(rangs)
     top1 = sum(r == 1 for r in rangs)
     top3 = sum(bool(r and r <= 3) for r in rangs)
     mrr = sum(1 / r for r in rangs if r) / nb
-    print(f"\n{nb} questions : top 1 {top1}/{nb}, top 3 {top3}/{nb}, MRR {mrr:.2f}")
+    print(tr(f"\n{nb} questions : top 1 {top1}/{nb}, top 3 {top3}/{nb}, MRR {mrr:.2f}",
+             f"\n{nb} questions: top 1 {top1}/{nb}, top 3 {top3}/{nb}, MRR {mrr:.2f}"))
     return 2 if absentes else 0  # 2 : jeu de questions à mettre à jour (le score, lui, est valable)
 
 
@@ -1433,7 +1533,7 @@ def selftest() -> int:
     echecs = []
 
     def cas(nom: str, bon: bool):
-        print(("ok     " if bon else "ÉCHEC  ") + nom)
+        print(("ok     " if bon else tr("ÉCHEC  ", "FAIL   ")) + nom)
         if not bon:
             echecs.append(nom)
 
@@ -1447,8 +1547,9 @@ def selftest() -> int:
         os.environ["MEM_SYNONYMES"] = str(latin1)
         try:
             with contextlib.redirect_stderr(io.StringIO()) as err:
-                cas("synonymes.txt hors UTF-8 : ignoré avec un avis, pas de plantage",
-                    _synonymes_perso() == [] and "synonymes ignorés" in err.getvalue())
+                cas(tr("synonymes.txt hors UTF-8 : ignoré avec un avis, pas de plantage",
+                       "synonymes.txt not in UTF-8: ignored with a notice, no crash"),
+                    _synonymes_perso() == [] and tr("synonymes ignorés", "synonyms ignored") in err.getvalue())
         finally:
             os.environ.pop("MEM_SYNONYMES") if ancien_syn is None else os.environ.update(MEM_SYNONYMES=ancien_syn)
         vide = Path(tmp) / "vide"
@@ -1462,7 +1563,23 @@ def selftest() -> int:
                     main(args)
                 finally:
                     os.environ.pop("MEM_DB") if ancien_db is None else os.environ.update(MEM_DB=ancien_db)
-            cas(f"mem {' '.join(args[:1])} … : --dossier pris en compte", f"dossier : {vide}" in out.getvalue())
+            cas(tr(f"mem {args[0]} … : --dossier pris en compte", f"mem {args[0]} …: --dir taken into account"),
+                tr(f"dossier : {vide}", f"folder: {vide}") in out.getvalue())
+        avant_langue = {k: os.environ.get(k) for k in ("MEM_LANG", "LC_ALL", "LC_MESSAGES", "LANG")}
+        try:
+            choix = []
+            for env in ({"MEM_LANG": "en", "LANG": "fr_FR.UTF-8"}, {"MEM_LANG": "fr"}, {"LANG": "fr_CA.UTF-8"},
+                        {"LC_ALL": "C.UTF-8", "LANG": "fr_FR.UTF-8"}, {}):
+                for k in avant_langue:
+                    os.environ.pop(k, None)
+                os.environ.update(env)
+                choix.append(langue())
+        finally:
+            for k, val in avant_langue.items():
+                os.environ.pop(k, None) if val is None else os.environ.update({k: val})
+        cas(tr("langue : MEM_LANG d'abord, puis LC_ALL, LC_MESSAGES, LANG ; anglais par défaut",
+               "language: MEM_LANG first, then LC_ALL, LC_MESSAGES, LANG; English by default"),
+            choix == ["en", "fr", "fr", "en", "en"])
         for en, fr in COMMANDES_EN.items():  # chaque nom anglais est déclaré et mène à sa commande française
             with contextlib.redirect_stdout(io.StringIO()) as out:
                 try:
@@ -1470,21 +1587,23 @@ def selftest() -> int:
                     code = None
                 except SystemExit as e:
                     code = e.code
-            cas(f"mem {en} = mem {fr}", code == 0 and f"usage: mem {fr} " in out.getvalue())
+            cas(f"mem {en} = mem {fr}", code == 0 and f"usage: mem {tr(fr, en)} " in out.getvalue())
 
         # doublons : regroupement par paire de notes, jamais deux passages d'une même note.
         try:
             import numpy as np
         except ImportError:
-            print("(sauté : doublons, numpy absent)")
+            print(tr("(sauté : doublons, numpy absent)", "(skipped: duplicates, numpy missing)"))
         else:
             m = np.array([[1, 0, 0], [0.99, 0.141, 0], [1, 0, 0], [0, 1, 0], [0, 0.995, 0.0999]], dtype=np.float32)
             m /= np.linalg.norm(m, axis=1, keepdims=True)
             pp = paires_proches(["a.md", "b.md", "a.md", "c.md", "d.md"], m, 0.95)
             mv = meilleurs_par_note(["a.md", "b.md", "a.md", "c.md", "d.md"], m, m[:1], 0.95)
-            cas("voisins : une ligne par note (son meilleur passage), du plus proche au moins proche",
+            cas(tr("voisins : une ligne par note (son meilleur passage), du plus proche au moins proche",
+               "neighbors: one line per note (its best passage), closest first"),
                 [f for f, _, _ in mv] == ["a.md", "b.md"] and mv[0][2] in (0, 2))
-            cas("doublons : paires de notes, passages d'une même note ignorés, tri du plus proche",
+            cas(tr("doublons : paires de notes, passages d'une même note ignorés, tri du plus proche",
+               "duplicates: pairs of notes, passages of the same note ignored, closest first"),
                 set(pp) == {("a.md", "b.md"), ("c.md", "d.md")} and len(pp[("a.md", "b.md")]) == 2
                 and pp[("a.md", "b.md")][0][0] >= pp[("a.md", "b.md")][1][0] - 1e-6)
         with contextlib.redirect_stderr(io.StringIO()) as err:
@@ -1494,7 +1613,8 @@ def selftest() -> int:
                 rc = doublons(vide, Path(tmp) / "dbl.db")
             finally:
                 os.environ.pop("MEM_SENS") if ancien_sens is None else os.environ.update(MEM_SENS=ancien_sens)
-        cas("doublons : sans le sens, code 2 et avis", rc == 2 and "par le sens" in err.getvalue())
+        cas(tr("doublons : sans le sens, code 2 et avis", "duplicates: without meaning, code 2 and a notice"),
+            rc == 2 and tr("par le sens", "by meaning") in err.getvalue())
 
         # perimes : renvois morts, dans une mémoire et un dépôt jetables.
         if subprocess.run(["git", "--version"], capture_output=True).returncode == 0:
@@ -1518,21 +1638,26 @@ def selftest() -> int:
             (mp / "MEMORY.md").write_text("- [N](project/n.md)\n- [Partie](project/partie.md)\n", encoding="utf-8")
             morts, index_m, liens = renvois_morts(mp, [dep])
             trouves = {(g, r) for _, g, r in morts.get("project/n.md", [])}
-            cas("perimes : commit absent, fichier absent, chemin absent signalés",
+            cas(tr("perimes : commit absent, fichier absent, chemin absent signalés",
+               "stale: missing commit, missing file, missing path reported"),
                 trouves == {("commit", faux), ("fichier", "api/disparu.py"), ("chemin", "~/nexiste-pas-mem-selftest/x")})
-            cas("perimes : archive ignorée, commit présent, fin de chemin suivie, empreinte et gabarit tus",
+            cas(tr("perimes : archive ignorée, commit présent, fin de chemin suivie, empreinte et gabarit tus",
+               "stale: archive ignored; existing commit, tracked path ending, hash and template not reported"),
                 set(morts) == {"project/n.md"})
-            cas("perimes : ligne de MEMORY.md vers une note absente",
+            cas(tr("perimes : ligne de MEMORY.md vers une note absente", "stale: MEMORY.md line pointing to a missing note"),
                 index_m == [("MEMORY.md", 2, "project/partie.md")])
-            cas("perimes : lien [[…]] sans note compté à part", set(liens) == {"a-ecrire"})
+            cas(tr("perimes : lien [[…]] sans note compté à part",
+                   "stale: [[…]] link without a note counted separately"), set(liens) == {"a-ecrire"})
             pt = Path(tmp) / "pt.md"
             pt.write_text("## POINT DE REPRISE 14/11 10h00\n- journal : ~/nexiste-pas-mem-selftest/j.log\n", encoding="utf-8")
             with contextlib.redirect_stdout(io.StringIO()) as out:
                 rc = point(mp, str(pt), "project/p.md", "archive/p.md", fichier_verrou=Path(tmp) / "vpt")
-            cas("point : avis des renvois introuvables du point neuf, sans refus",
-                rc == 0 and "à vérifier : 1 renvoi" in out.getvalue() and "~/nexiste-pas-mem-selftest/j.log" in out.getvalue())
+            cas(tr("point : avis des renvois introuvables du point neuf, sans refus",
+               "handover: notice of the new note's missing references, no refusal"),
+                rc == 0 and tr("à vérifier : 1 renvoi", "to check: 1 reference") in out.getvalue()
+                and "~/nexiste-pas-mem-selftest/j.log" in out.getvalue())
         else:
-            print("(sauté : perimes, git absent)")
+            print(tr("(sauté : perimes, git absent)", "(skipped: stale, git missing)"))
 
         # verifier-perte : le garde-fou de mem point.
         def dossier(nom: str, fichiers: dict) -> Path:
@@ -1543,20 +1668,25 @@ def selftest() -> int:
             return d
         av = dossier("vp-avant", {"project/a.md": "un\ndeux\ntrois\nun\n"})
         for nom, apres, attendu in (
-                ("identique", {"project/a.md": "un\ndeux\ntrois\nun\n"}, 0),
-                ("lignes passées dans l'archive", {"project/a.md": "un\n", "archive/a-ancien.md": "deux\ntrois\nun\n"}, 0),
-                ("ligne supprimée", {"project/a.md": "un\ntrois\nun\n"}, 1),
-                ("doublon retiré", {"project/a.md": "un\ndeux\ntrois\n"}, 1),
-                ("ordre inversé", {"project/a.md": "un\ntrois\ndeux\nun\n"}, 1),
-                ("ligne partie dans une autre note", {"project/a.md": "un\ndeux\nun\n", "project/b.md": "trois\n"}, 1)):
+                (tr("identique", "identical"), {"project/a.md": "un\ndeux\ntrois\nun\n"}, 0),
+                (tr("lignes passées dans l'archive", "lines moved to the archive"),
+                 {"project/a.md": "un\n", "archive/a-ancien.md": "deux\ntrois\nun\n"}, 0),
+                (tr("ligne supprimée", "line deleted"), {"project/a.md": "un\ntrois\nun\n"}, 1),
+                (tr("doublon retiré", "duplicate removed"), {"project/a.md": "un\ndeux\ntrois\n"}, 1),
+                (tr("ordre inversé", "order reversed"), {"project/a.md": "un\ntrois\ndeux\nun\n"}, 1),
+                (tr("ligne partie dans une autre note", "line moved to another note"),
+                 {"project/a.md": "un\ndeux\nun\n", "project/b.md": "trois\n"}, 1)):
             with contextlib.redirect_stdout(io.StringIO()):
                 rc = verifier_perte(av, dossier("vp-" + str(abs(hash(nom))), apres))
-            cas(f"verifier-perte : {nom} → code {attendu}", rc == attendu)
+            cas(tr(f"verifier-perte : {nom} → code {attendu}", f"check-loss: {nom} → code {attendu}"), rc == attendu)
         with contextlib.redirect_stderr(io.StringIO()):  # code 2 : rien sur stdout
-            cas("verifier-perte : AVANT absent → code 2, jamais « rien perdu »",
+            cas(tr("verifier-perte : AVANT absent → code 2, jamais « rien perdu »",
+               "check-loss: BEFORE missing → code 2, never \"nothing lost\""),
                 verifier_perte(Path(tmp) / "absent", av) == 2)
-            cas("verifier-perte : APRÈS absent → code 2", verifier_perte(av, Path(tmp) / "absent") == 2)
-            cas("verifier-perte : AVANT sans note → code 2", verifier_perte(vide, av) == 2)
+            cas(tr("verifier-perte : APRÈS absent → code 2",
+                   "check-loss: AFTER missing → code 2"), verifier_perte(av, Path(tmp) / "absent") == 2)
+            cas(tr("verifier-perte : AVANT sans note → code 2",
+                   "check-loss: BEFORE without notes → code 2"), verifier_perte(vide, av) == 2)
 
     # Valeurs factices, assemblées pour qu'aucun outil ne les prenne pour de vraies clés.
     sk = "sk-" + "Ab3" * 9
@@ -1573,18 +1703,21 @@ def selftest() -> int:
     for l in a_masquer:
         texte, motif = masquer(l)
         nom = l.replace(sk, "<sk-…>").replace(ghp, "<ghp_…>")
-        cas(f"masqué : {nom.split(':')[0].split('=')[0][:30].strip()} ({motif})", bool(motif))
+        debut = nom.split(':')[0].split('=')[0][:30].strip()
+        cas(tr(f"masqué : {debut} ({motif})", f"masked: {debut} ({motif_lisible(motif or '')})"), bool(motif))
     a_garder = ["token_count: 1234", "le jeton est renouvelé chaque jour", "le mot de passe est dans le coffre",
                 "attention : le mot de passe est requis", "le mot de passe est changé", "le secret vaut d'être gardé",
                 "jeton d'horodatage valide jusqu'en 2027", "voir la clé publique ed25519 du relais",
                 "le mot de passe est obligatoire", "le mot de passe est « dans le coffre »",
                 "le mot de passe est Requis", "le secret vaut mieux que l'oubli"]
     for l in a_garder:
-        cas(f"gardé : {l[:40]}", masquer(l) == (l, None))
+        cas(tr(f"gardé : {l[:40]}", f"kept: {l[:40]}"), masquer(l) == (l, None))
 
-    cas("date : rappel 19/11 écrit le 12/11 reste à venir", date_du_passage("- 19/11 x", "2026-11-12") == "2026-11-19")
-    cas("date : 08/11 dans une note de mars = l'an passé", date_du_passage("- 08/11 x", "2026-03-10") == "2025-11-08")
-    cas("date : 31/02 ignorée", date_du_passage("- 31/02 x", "2026-03-10") is None)
+    cas(tr("date : rappel 19/11 écrit le 12/11 reste à venir",
+           "date: reminder 19/11 written on 12/11 is still ahead"), date_du_passage("- 19/11 x", "2026-11-12") == "2026-11-19")
+    cas(tr("date : 08/11 dans une note de mars = l'an passé",
+           "date: 08/11 in a March note = last year"), date_du_passage("- 08/11 x", "2026-03-10") == "2025-11-08")
+    cas(tr("date : 31/02 ignorée", "date: 31/02 ignored"), date_du_passage("- 31/02 x", "2026-03-10") is None)
 
     global RECLASSEUR, SOCKET_RECLASSEUR
     ancien, ancien_r, ancien_dossier = os.environ.get("MEM_SENS"), os.environ.get("MEM_RECLASSER"), RECLASSEUR
@@ -1603,48 +1736,57 @@ def selftest() -> int:
                 encoding="utf-8")
             try:
                 indexer(racine, base)
-                cas("index : dossier nommé *.md ignoré", True)
+                cas(tr("index : dossier nommé *.md ignoré", "index: folder named *.md ignored"), True)
             except Exception as e:  # noqa: BLE001
-                cas(f"index : dossier nommé *.md ignoré ({type(e).__name__})", False)
+                cas(tr("index : dossier nommé *.md ignoré", "index: folder named *.md ignored") + f" ({type(e).__name__})", False)
                 return 1
             con = sqlite3.connect(base)
             tout = "\n".join(" ".join(map(str, r)) for r in con.execute("SELECT titre, auteur, texte FROM passages"))
             con.close()
-            cas("index : corps d'un bloc de clé indenté absent", "abcd1234ef" not in tout)
-            cas("index : bloc de clé refermé (la suite est indexée)", "wireguard du relais" in tout)
-            cas("index : secret d'un champ d'en-tête absent", FAUX not in tout)
-            cas("index : secret court de la description absent", "cle api: abcd" not in tout)
-            cas("chercher : plusieurs mots", any(r[0] == "project/pieges.md" for r in chercher(racine, base, "wireguard relais")))
+            cas(tr("index : corps d'un bloc de clé indenté absent",
+                   "index: body of an indented key block absent"), "abcd1234ef" not in tout)
+            cas(tr("index : bloc de clé refermé (la suite est indexée)",
+                   "index: key block closed (what follows is indexed)"), "wireguard du relais" in tout)
+            cas(tr("index : secret d'un champ d'en-tête absent", "index: secret in a header field absent"), FAUX not in tout)
+            cas(tr("index : secret court de la description absent",
+                   "index: short secret in the description absent"), "cle api: abcd" not in tout)
+            cas(tr("chercher : plusieurs mots",
+                   "search: several words"), any(r[0] == "project/pieges.md" for r in chercher(racine, base, "wireguard relais")))
             for d in ("feedback", "projectx"):
                 (racine / d).mkdir()
                 (racine / d / "relais.md").write_text(f"---\nname: relais\nmetadata:\n  type: {d}\n---\n\nwireguard relais {d}\n",
                                                       encoding="utf-8")
             dans = normaliser_dans(racine, "./project")
             trouves = {r[0] for r in chercher(racine, base, "wireguard relais", dans=dans)}
-            cas("chercher --dans ./project : ce dossier seulement (pas projectx/)",
+            cas(tr("chercher --dans ./project : ce dossier seulement (pas projectx/)",
+                   "search --in ./project: this folder only (not projectx/)"),
                 dans == "project/" and trouves == {"project/pieges.md"})
-            cas("chercher --dans une note : elle seule",
+            cas(tr("chercher --dans une note : elle seule", "search --in a note: that note only"),
                 {r[0] for r in chercher(racine, base, "wireguard", dans=normaliser_dans(racine, "feedback/relais.md"))}
                 == {"feedback/relais.md"})
-            cas("chercher --dans inexistant : None (refusé par la ligne de commande)",
+            cas(tr("chercher --dans inexistant : None (refusé par la ligne de commande)",
+               "search --in missing: None (refused by the command line)"),
                 normaliser_dans(racine, "nulle-part") is None and normaliser_dans(racine, "/etc") is None)
             try:
                 voir(racine, base, "project/pieges.md")
-                cas("voir sans :ligne refusé proprement", False)
+                cas(tr("voir sans :ligne refusé proprement", "show without :line refused cleanly"), False)
             except SystemExit:
-                cas("voir sans :ligne refusé proprement", True)
+                cas(tr("voir sans :ligne refusé proprement", "show without :line refused cleanly"), True)
             with contextlib.redirect_stderr(io.StringIO()) as err:
-                cas("voir : passage absent = code 1 et avis sur stderr",
-                    voir(racine, base, "project/absent.md:3") == 1 and "introuvable" in err.getvalue())
-                cas("bench : fichier absent = code 2 sans trace", bench(racine, base, Path(tmp) / "absent.tsv") == 2)
+                cas(tr("voir : passage absent = code 1 et avis sur stderr",
+                       "show: missing passage = code 1 and a notice on stderr"),
+                    voir(racine, base, "project/absent.md:3") == 1 and tr("introuvable", "not found") in err.getvalue())
+                cas(tr("bench : fichier absent = code 2 sans trace",
+                       "bench: missing file = code 2, no traceback"), bench(racine, base, Path(tmp) / "absent.tsv") == 2)
                 latin = Path(tmp) / "q.tsv"
                 latin.write_bytes("caf\xe9\tproject/pieges.md\n".encode("latin-1"))
-                cas("bench : questions hors UTF-8 = code 2 sans trace", bench(racine, base, latin) == 2)
+                cas(tr("bench : questions hors UTF-8 = code 2 sans trace",
+                       "bench: questions not in UTF-8 = code 2, no traceback"), bench(racine, base, latin) == 2)
             faits = [ajouter(racine, "project", "Note double", "un"), ajouter(racine, "project", "Note double", "deux")]
-            cas("ajouter : deux titres égaux, deux fichiers", len(set(faits)) == 2)
-            for nom, titre in (("ajouter : troisième titre égal refusé", "Note double"),
-                               ("ajouter : titre sur deux lignes refusé", "deux\nlignes"),
-                               ("ajouter : secret refusé", "mot de passe : hunter2")):
+            cas(tr("ajouter : deux titres égaux, deux fichiers", "add: two equal titles, two files"), len(set(faits)) == 2)
+            for nom, titre in ((tr("ajouter : troisième titre égal refusé", "add: third equal title refused"), "Note double"),
+                               (tr("ajouter : titre sur deux lignes refusé", "add: two-line title refused"), "deux\nlignes"),
+                               (tr("ajouter : secret refusé", "add: secret refused"), "mot de passe : hunter2")):
                 try:
                     ajouter(racine, "project", titre, "x")
                     cas(nom, False)
@@ -1660,9 +1802,11 @@ def selftest() -> int:
             with contextlib.redirect_stdout(io.StringIO()):
                 ok1, ok2 = point(racine, str(un), fichier_verrou=Path(tmp) / "v"), point(racine, str(deux), fichier_verrou=Path(tmp) / "v")
             note_p, arch_p = (racine / POINT_NOTE).read_text(), (racine / POINT_ARCHIVE).read_text()
-            cas("point : créé puis remplacé", ok1 == 0 and ok2 == 0 and note_p.startswith("---\nname: point-de-reprise")
+            cas(tr("point : créé puis remplacé",
+                   "handover: created then replaced"), ok1 == 0 and ok2 == 0 and note_p.startswith("---\nname: point-de-reprise")
                 and "def456" in note_p and "abc123" not in note_p)
-            cas("point : ancien point archivé mot pour mot (doublons compris)",
+            cas(tr("point : ancien point archivé mot pour mot (doublons compris)",
+                "handover: previous note archived verbatim (duplicates included)"),
                 arch_p.count("- prod = abc123") == 2 and "## POINT DE REPRISE 01/01 10h00" in arch_p)
             import shutil
 
@@ -1683,17 +1827,22 @@ def selftest() -> int:
                 finally:
                     os.environ.clear(), os.environ.update(ancien_env)
                 dernier = g("show", "--name-only", "--format=", "HEAD").stdout.split()
-                cas("point : le commit n'emporte que la note et l'archive",
+                cas(tr("point : le commit n'emporte que la note et l'archive",
+                       "handover: the commit takes only the note and the archive"),
                     sorted(dernier) == sorted([POINT_ARCHIVE, POINT_NOTE]) and "project/autre.md" in g("diff", "--cached", "--name-only").stdout)
                 note_p = (racine / POINT_NOTE).read_text()
             else:
-                print("(sauté : commit limité de mem point, git absent)")
+                print(tr("(sauté : commit limité de mem point, git absent)",
+                         "(skipped: limited commit of mem handover, git missing)"))
             mauvais = Path(tmp) / "p3.md"
             with contextlib.redirect_stderr(io.StringIO()):
-                cas("point : fichier absent, code 2 sans trace", point(racine, str(Path(tmp) / "absent.md"),
+                cas(tr("point : fichier absent, code 2 sans trace",
+                       "handover: missing file, code 2, no traceback"), point(racine, str(Path(tmp) / "absent.md"),
                                                                      fichier_verrou=Path(tmp) / "v") == 2)
-            for nom, contenu in (("point : sans titre « POINT DE REPRISE » refusé", "## Notes\nx\n"),
-                                 ("point : secret refusé, rien d'écrit", "## POINT DE REPRISE 03/01\nmot de passe : hunter2\n")):
+            for nom, contenu in ((tr("point : sans titre « POINT DE REPRISE » refusé",
+                                     "handover: no \"POINT DE REPRISE\" heading, refused"), "## Notes\nx\n"),
+                                 (tr("point : secret refusé, rien d'écrit", "handover: secret refused, nothing written"),
+                                  "## POINT DE REPRISE 03/01\nmot de passe : hunter2\n")):
                 mauvais.write_text(contenu, encoding="utf-8")
                 with contextlib.redirect_stderr(io.StringIO()):
                     cas(nom, point(racine, str(mauvais), fichier_verrou=Path(tmp) / "v") == 2 and (racine / POINT_NOTE).read_text() == note_p)
@@ -1703,8 +1852,9 @@ def selftest() -> int:
             RECLASSEUR = Path(tmp) / "absent"
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
-                cas("reclasser : reclasseur absent, ordre inchangé et avis", reclasser("q", lignes) == lignes
-                    and "reclassement indisponible" in err.getvalue())
+                cas(tr("reclasser : reclasseur absent, ordre inchangé et avis",
+                       "rerank: reranker missing, order unchanged and a notice"), reclasser("q", lignes) == lignes
+                    and tr("reclassement indisponible", "reranking unavailable") in err.getvalue())
             if node_pour_reclasser():
                 RECLASSEUR = Path(tmp) / "faux"
                 RECLASSEUR.mkdir()
@@ -1712,11 +1862,13 @@ def selftest() -> int:
                     'import fs from "node:fs"; const {docs} = JSON.parse(fs.readFileSync(0, "utf8"));'
                     " process.stdout.write(JSON.stringify(docs.map((_, i) => i)));")
                 sortie = reclasser("q", lignes)
-                cas("reclasser : le passage le mieux noté remonte en tête",
+                cas(tr("reclasser : le passage le mieux noté remonte en tête",
+                       "rerank: the best-scored passage moves to the top"),
                     sortie[0] == lignes[K_RECLASSE - 1] and sorted(sortie) == sorted(lignes)
                     and sortie[K_RECLASSE:] == lignes[K_RECLASSE:])
             else:
-                print("(sauté : reclasser avec un faux reclasseur, node absent)")
+                print(tr("(sauté : reclasser avec un faux reclasseur, node absent)",
+                         "(skipped: rerank with a fake reranker, node missing)"))
     finally:
         RECLASSEUR, SOCKET_RECLASSEUR = ancien_dossier, ancien_socket
         for cle, val in (("MEM_SENS", ancien), ("MEM_RECLASSER", ancien_r)):
@@ -1724,7 +1876,8 @@ def selftest() -> int:
                 os.environ.pop(cle, None)
             else:
                 os.environ[cle] = val
-    print(f"\n{'aucun échec' if not echecs else str(len(echecs)) + ' échec(s)'}")
+    print("\n" + (tr("aucun échec", "no failures") if not echecs
+                  else tr(f"{len(echecs)} échec(s)", f"{len(echecs)} failure(s)")))
     return 1 if echecs else 0
 
 
@@ -1734,57 +1887,104 @@ COMMANDES_EN = {"search": "chercher", "show": "voir", "add": "ajouter", "neighbo
                 "handover": "point", "check-loss": "verifier-perte"}
 
 
+def deux_noms(fr: str, en: str) -> tuple[str, str]:
+    """Nom d'option ou de commande : celui de la langue choisie d'abord (l'aide le montre en premier)."""
+    return (fr, en) if langue() == "fr" else (en, fr)
+
+
+def commande(sub, fr: str, en: str, **kw):
+    premier, autre = deux_noms(fr, en)
+    return sub.add_parser(premier, aliases=[autre], **kw)
+
+
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="mem", description=__doc__.splitlines()[0])
-    ap.add_argument("--dossier", "--dir", type=Path, help="dossier mémoire (sinon détecté, voir mem --help)")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    ap = argparse.ArgumentParser(prog="mem", description=tr(
+        "chercher dans la mémoire des agents, sans réseau ni modèle distant",
+        "search your coding agents' memory, with no network and no remote model"))
+    ap.add_argument(*deux_noms("--dossier", "--dir"), dest="dossier", metavar=tr("DOSSIER", "DIR"), type=Path,
+                    help=tr("dossier mémoire (sinon détecté, voir mem --help)", "memory folder (otherwise detected)"))
+    sub = ap.add_subparsers(dest="cmd", required=True, metavar=tr("COMMANDE", "COMMAND"))
     commun = argparse.ArgumentParser(add_help=False)  # « mem chercher --dossier D … » marche aussi
-    commun.add_argument("--dossier", "--dir", type=Path, default=argparse.SUPPRESS, help="dossier mémoire")
-    c = sub.add_parser("chercher", aliases=["search"], parents=[commun])
-    c.add_argument("mots", nargs="+")
-    c.add_argument("--n", type=int, default=5)
-    c.add_argument("--type")
-    c.add_argument("--depuis", "--since")
-    c.add_argument("--archives", action="store_true", help="chercher aussi dans archive/ d'emblée")
-    c.add_argument("--dans", "--in", help="seulement ce sous-dossier (project/) ou cette note (project/x.md)")
-    c.add_argument("--tous", "--all", action="store_true",
-                   help="notes de tous les auteurs, et les dossiers de ~/.config/mem/dossiers")
-    c.add_argument("--vite", "--fast", action="store_true", help="sans reclassement par le modèle local (0,3 s au lieu de ~8 s)")
-    v = sub.add_parser("voir", aliases=["show"], parents=[commun])
-    v.add_argument("cible")
-    a = sub.add_parser("ajouter", aliases=["add"], parents=[commun])
+    commun.add_argument(*deux_noms("--dossier", "--dir"), dest="dossier", metavar=tr("DOSSIER", "DIR"), type=Path,
+                        default=argparse.SUPPRESS, help=tr("dossier mémoire", "memory folder"))
+    dans_aide = tr("seulement ce sous-dossier (project/) ou cette note (project/x.md)",
+                   "only this subfolder (project/) or this note (project/x.md)")
+    c = commande(sub, "chercher", "search", parents=[commun], help=tr("chercher dans les notes", "search the notes"))
+    c.add_argument("mots", nargs="+", metavar=tr("mots", "words"))
+    c.add_argument("--n", type=int, default=5, help=tr("nombre de résultats", "number of results"))
+    c.add_argument("--type", help=tr("seulement ce type de note (project, feedback…)",
+                                     "only this note type (project, feedback…)"))
+    c.add_argument(*deux_noms("--depuis", "--since"), dest="depuis", metavar=tr("AAAA-MM-JJ", "YYYY-MM-DD"),
+                   help=tr("seulement les passages datés de ce jour ou après", "only passages dated on or after this day"))
+    c.add_argument("--archives", action="store_true",
+                   help=tr("chercher aussi dans archive/ d'emblée", "search archive/ too, from the start"))
+    c.add_argument(*deux_noms("--dans", "--in"), dest="dans", metavar=tr("DANS", "PATH"), help=dans_aide)
+    c.add_argument(*deux_noms("--tous", "--all"), dest="tous", action="store_true",
+                   help=tr("notes de tous les auteurs, et les dossiers de ~/.config/mem/dossiers",
+                           "notes of every author, and the folders listed in ~/.config/mem/dossiers"))
+    c.add_argument(*deux_noms("--vite", "--fast"), dest="vite", action="store_true",
+                   help=tr("sans reclassement par le modèle local (0,3 s au lieu de ~8 s)",
+                           "no reranking by the local model (0.3 s instead of ~8 s)"))
+    v = commande(sub, "voir", "show", parents=[commun],
+                       help=tr("montrer un passage dans son contexte", "show a passage in context"))
+    v.add_argument("cible", metavar=tr("fichier:ligne", "file:line"))
+    a = commande(sub, "ajouter", "add", parents=[commun],
+                       help=tr("ajouter une note (texte sur l'entrée standard)", "add a note (text on standard input)"))
     a.add_argument("--type", required=True, choices=["user", "feedback", "project", "reference"])
-    a.add_argument("titre", metavar="titre|title")
-    a.add_argument("--quand-meme", "--anyway", action="store_true", help="écrire même si une note proche existe déjà")
-    vs = sub.add_parser("voisins", aliases=["neighbors"], parents=[commun],
-                        help="notes proches d'une note (doublon avant de la garder)")
+    a.add_argument("titre", metavar=tr("titre", "title"))
+    a.add_argument(*deux_noms("--quand-meme", "--anyway"), dest="quand_meme", action="store_true",
+                   help=tr("écrire même si une note proche existe déjà", "write it even if a similar note already exists"))
+    vs = commande(sub, "voisins", "neighbors", parents=[commun],
+                        help=tr("notes proches d'une note (doublon avant de la garder)",
+                                "notes close to a note (duplicate check before keeping it)"))
     vs.add_argument("note")
-    vs.add_argument("--seuil", "--threshold", type=float, default=VOISINS_SEUIL)
-    sub.add_parser("indexer", aliases=["index"], parents=[commun])
-    sub.add_parser("etat", aliases=["status"], parents=[commun])
-    per = sub.add_parser("perimes", aliases=["stale"], parents=[commun], help="notes qui renvoient à ce qui n'existe plus")
-    per.add_argument("--depot", "--repo", type=Path, action="append",
-                     help="dépôt git où chercher fichiers et commits (répétable)")
-    per.add_argument("--n", type=int, default=30, help="notes affichées")
-    per.add_argument("--dans", "--in", help="seulement ce sous-dossier (project/) ou cette note")
-    dbl = sub.add_parser("doublons", aliases=["duplicates"], parents=[commun],
-                         help="notes qui se répètent ou se contredisent (par le sens)")
-    dbl.add_argument("--seuil", "--threshold", type=float, default=DOUBLONS_SEUIL,
-                     help=f"cosinus minimal (défaut {DOUBLONS_SEUIL})")
-    dbl.add_argument("--n", type=int, default=20, help="paires de notes affichées")
-    dbl.add_argument("--dans", "--in", help="seulement ce sous-dossier (feedback/) ou cette note")
-    sub.add_parser("selftest", parents=[commun])
-    b = sub.add_parser("bench", parents=[commun])
-    b.add_argument("questions", type=Path)
-    b.add_argument("--n", type=int, default=10)
-    pt = sub.add_parser("point", aliases=["handover"], parents=[commun], help="point de reprise neuf (avant /clear ou /compact)")
-    pt.add_argument("fichier", help="fichier du point neuf, ou « - » pour l'entrée standard")
-    pt.add_argument("--note", default=POINT_NOTE, help=f"note du point, relative au dossier ({POINT_NOTE})")
-    pt.add_argument("--archive", default=POINT_ARCHIVE, help=f"archive des anciens points ({POINT_ARCHIVE})")
-    pt.add_argument("--auteur", "--author", default="", help="nom de l'agent, repris dans le commit et l'archive")
-    p = sub.add_parser("verifier-perte", aliases=["check-loss"], parents=[commun])
-    p.add_argument("avant", type=Path)
-    p.add_argument("apres", type=Path)
+    vs.add_argument(*deux_noms("--seuil", "--threshold"), dest="seuil", metavar=tr("SEUIL", "THRESHOLD"), type=float,
+                    default=VOISINS_SEUIL,
+                    help=tr(f"cosinus minimal (défaut {VOISINS_SEUIL})", f"minimum cosine (default {VOISINS_SEUIL})"))
+    commande(sub, "indexer", "index", parents=[commun], help=tr("refaire l'index", "rebuild the index"))
+    commande(sub, "etat", "status", parents=[commun],
+                   help=tr("dossier, base, nombre de notes, lignes écartées comme secrets",
+                           "folder, database, note count, lines withheld as secrets"))
+    per = commande(sub, "perimes", "stale", parents=[commun],
+                         help=tr("notes qui renvoient à ce qui n'existe plus", "notes that point to things that no longer exist"))
+    per.add_argument(*deux_noms("--depot", "--repo"), dest="depot", metavar=tr("DEPOT", "REPO"), type=Path, action="append",
+                     help=tr("dépôt git où chercher fichiers et commits (répétable)",
+                             "git repository to look up files and commits in (repeatable)"))
+    per.add_argument("--n", type=int, default=30, help=tr("notes affichées", "notes shown"))
+    per.add_argument(*deux_noms("--dans", "--in"), dest="dans", metavar=tr("DANS", "PATH"), help=dans_aide)
+    dbl = commande(sub, "doublons", "duplicates", parents=[commun],
+                         help=tr("notes qui se répètent ou se contredisent (par le sens)",
+                                 "notes that repeat or contradict each other (by meaning)"))
+    dbl.add_argument(*deux_noms("--seuil", "--threshold"), dest="seuil", metavar=tr("SEUIL", "THRESHOLD"), type=float,
+                     default=DOUBLONS_SEUIL,
+                     help=tr(f"cosinus minimal (défaut {DOUBLONS_SEUIL})", f"minimum cosine (default {DOUBLONS_SEUIL})"))
+    dbl.add_argument("--n", type=int, default=20, help=tr("paires de notes affichées", "note pairs shown"))
+    dbl.add_argument(*deux_noms("--dans", "--in"), dest="dans", metavar=tr("DANS", "PATH"), help=dans_aide)
+    sub.add_parser("selftest", parents=[commun],
+                   help=tr("autotest dans une mémoire jetable", "self-test in a throwaway memory"))
+    b = sub.add_parser("bench", parents=[commun],
+                       help=tr("top 1, top 3, MRR sur vos propres questions", "top 1, top 3, MRR on your own questions"))
+    b.add_argument("questions", type=Path, help=tr("une ligne « question<TAB>note,note »", "one line \"question<TAB>note,note\""))
+    b.add_argument("--n", type=int, default=10, help=tr("résultats regardés par question", "results looked at per question"))
+    pt = commande(sub, "point", "handover", parents=[commun],
+                        help=tr("point de reprise neuf (avant /clear ou /compact)",
+                                "new handover note (before /clear or /compact)"))
+    pt.add_argument("fichier", metavar=tr("fichier", "file"),
+                    help=tr("fichier du point neuf, ou « - » pour l'entrée standard",
+                            "file holding the new note, or \"-\" for standard input"))
+    pt.add_argument("--note", default=POINT_NOTE,
+                    help=tr(f"note du point, relative au dossier ({POINT_NOTE})",
+                            f"handover note, relative to the folder ({POINT_NOTE})"))
+    pt.add_argument("--archive", default=POINT_ARCHIVE,
+                    help=tr(f"archive des anciens points ({POINT_ARCHIVE})", f"archive of previous notes ({POINT_ARCHIVE})"))
+    pt.add_argument(*deux_noms("--auteur", "--author"), dest="auteur", metavar=tr("AUTEUR", "AUTHOR"), default="",
+                    help=tr("nom de l'agent, repris dans le commit et l'archive",
+                            "agent name, used in the commit and the archive"))
+    p = commande(sub, "verifier-perte", "check-loss", parents=[commun],
+                       help=tr("rien de perdu entre deux copies du dossier mémoire",
+                               "nothing lost between two copies of a memory folder"))
+    p.add_argument("avant", type=Path, metavar=tr("AVANT", "BEFORE"))
+    p.add_argument("apres", type=Path, metavar=tr("APRES", "AFTER"))
     args = ap.parse_args(argv)
     args.cmd = COMMANDES_EN.get(args.cmd, args.cmd)  # « mem search » = « mem chercher »
 
@@ -1794,7 +1994,8 @@ def main(argv=None) -> int:
         return verifier_perte(args.avant, args.apres)
     racine = args.dossier or dossier_par_defaut()
     if racine is None or not racine.expanduser().is_dir():
-        print(f"mem : aucun dossier mémoire trouvé depuis {Path.cwd()} ; donner --dossier ou MEM_DIR", file=sys.stderr)
+        print(tr(f"mem : aucun dossier mémoire trouvé depuis {Path.cwd()} ; donner --dossier ou MEM_DIR",
+                 f"mem: no memory folder found from {Path.cwd()}; pass --dir or MEM_DIR"), file=sys.stderr)
         return 2
     racine = racine.expanduser()
     base = base_par_defaut(racine)
@@ -1806,10 +2007,12 @@ def main(argv=None) -> int:
             dans = normaliser_dans(racine, args.dans)
             if dans is None:
                 sous = sorted(d.name + "/" for d in racine.iterdir() if d.is_dir() and not d.name.startswith("."))
-                print(f"mem : « {args.dans} » n'existe pas dans {racine} (dossiers : {', '.join(sous) or 'aucun'})",
-                      file=sys.stderr)
+                liste_sous = ", ".join(sous)
+                print(tr(f"mem : « {args.dans} » n'existe pas dans {racine} (dossiers : {liste_sous or 'aucun'})",
+                         f"mem: \"{args.dans}\" does not exist in {racine} (folders: {liste_sous or 'none'})"), file=sys.stderr)
                 return 2
-        print(f"(mémoire : {racine}" + (f", dans {dans}" if dans else "") + ")", file=sys.stderr)
+        print(tr(f"(mémoire : {racine}" + (f", dans {dans}" if dans else "") + ")",
+                 f"(memory: {racine}" + (f", in {dans}" if dans else "") + ")"), file=sys.stderr)
         afficher(chercher(racine, base, args.mots, args.n, args.type, args.depuis, args.archives, auteur,
                           reclasse=not args.vite, dans=dans))
         if args.tous:
@@ -1819,7 +2022,8 @@ def main(argv=None) -> int:
             except FileNotFoundError:
                 autres = []
             except (OSError, ValueError) as e:
-                print(f"mem : {liste} illisible ({type(e).__name__}), --tous limité à ce dossier", file=sys.stderr)
+                print(tr(f"mem : {liste} illisible ({type(e).__name__}), --tous limité à ce dossier",
+                         f"mem: {liste} unreadable ({type(e).__name__}), --all limited to this folder"), file=sys.stderr)
                 autres = []
             for autre in autres:
                 autre = Path(autre).expanduser()
@@ -1835,7 +2039,7 @@ def main(argv=None) -> int:
         return voisins(racine, base, args.note, args.seuil)
     elif args.cmd == "indexer":
         total, refus = indexer(racine, base)
-        print(f"{total} passages indexés, {refus} lignes refusées")
+        print(tr(f"{total} passages indexés, {refus} lignes refusées", f"{total} passages indexed, {refus} lines refused"))
     elif args.cmd == "etat":
         etat(racine, base)
     elif args.cmd == "perimes":
@@ -1843,7 +2047,8 @@ def main(argv=None) -> int:
         if args.dans is not None:
             dans = normaliser_dans(racine, args.dans)
             if dans is None:
-                print(f"mem : « {args.dans} » n'existe pas dans {racine}", file=sys.stderr)
+                print(tr(f"mem : « {args.dans} » n'existe pas dans {racine}",
+                         f"mem: \"{args.dans}\" does not exist in {racine}"), file=sys.stderr)
                 return 2
         return perimes(racine, [d.expanduser() for d in args.depot] if args.depot else None, args.n, dans)
     elif args.cmd == "doublons":
@@ -1851,7 +2056,8 @@ def main(argv=None) -> int:
         if args.dans is not None:
             dans = normaliser_dans(racine, args.dans)
             if dans is None:
-                print(f"mem : « {args.dans} » n'existe pas dans {racine}", file=sys.stderr)
+                print(tr(f"mem : « {args.dans} » n'existe pas dans {racine}",
+                         f"mem: \"{args.dans}\" does not exist in {racine}"), file=sys.stderr)
                 return 2
         return doublons(racine, base, args.seuil, args.n, dans)
     elif args.cmd == "point":

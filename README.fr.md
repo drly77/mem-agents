@@ -20,7 +20,8 @@ Aucun texte ne quitte la machine.
 
 Chaque commande et chaque option a aussi un nom anglais, qui marche de la même façon : `search`, `show`,
 `add`, `status`, `duplicates`, `neighbors`, `stale`, `handover`, `check-loss`, `index` ; `--dir`, `--fast`,
-`--in`, `--all`, `--since`, `--anyway`, `--threshold`, `--repo`, `--author`.
+`--in`, `--all`, `--since`, `--anyway`, `--threshold`, `--repo`, `--author`. L'aide et les messages suivent la
+langue du système (français si `LANG` commence par `fr`, anglais sinon) ; `MEM_LANG=fr` ou `MEM_LANG=en` l'impose.
 
 ```
 mem chercher "qui a le droit de déployer ?"
@@ -223,6 +224,7 @@ est requis » et reste visible. La seule règle sûre : ne pas écrire de secret
 | Variable | Rôle |
 |---|---|
 | `MEM_DIR` | dossier mémoire |
+| `MEM_LANG` | `fr` ou `en` : langue de l'aide et des messages (défaut : d'après `LC_ALL`, `LC_MESSAGES`, `LANG` ; anglais) |
 | `MEM_DB` | base de l'index (sinon `~/.local/share/mem/<projet>.db`, 0600) |
 | `MEM_SENS=0` | sans recherche par le sens |
 | `MEM_SENS_URL` | adresse d'Ollama (`http://127.0.0.1:11434/api/embed`) |

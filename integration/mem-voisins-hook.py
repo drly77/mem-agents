@@ -18,6 +18,17 @@ from pathlib import Path
 DELAI = 60  # secondes : réindexer la note neuve demande ses vecteurs à Ollama
 
 
+def en_francais() -> bool:
+    """Même règle que mem : MEM_LANG, sinon la locale (LC_ALL, LC_MESSAGES, LANG) ; anglais par défaut."""
+    choix = os.environ.get("MEM_LANG", "").strip().lower()[:2]
+    if choix in ("fr", "en"):
+        return choix == "fr"
+    for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        if os.environ.get(var):
+            return os.environ[var].lower().startswith("fr")
+    return False
+
+
 def racine_memoire(chemin: Path) -> Path | None:
     parties = chemin.parts
     for i in range(len(parties) - 1, 2, -1):
@@ -49,9 +60,14 @@ def main() -> int:
         return 0
     if r.returncode != 1 or not r.stdout.strip():
         return 0
-    print(f"mem : la note {rel} ressemble à des notes existantes :\n{r.stdout.rstrip()}\n"
-          "Si elle redit l'une d'elles : reporte ce qu'elle apporte dans la note existante, puis retire celle-ci "
-          "(et sa ligne de MEMORY.md). Si le sujet est vraiment autre, garde-la.", file=sys.stderr)
+    if en_francais():
+        print(f"mem : la note {rel} ressemble à des notes existantes :\n{r.stdout.rstrip()}\n"
+              "Si elle redit l'une d'elles : reporte ce qu'elle apporte dans la note existante, puis retire celle-ci "
+              "(et sa ligne de MEMORY.md). Si le sujet est vraiment autre, garde-la.", file=sys.stderr)
+    else:
+        print(f"mem: the note {rel} looks like existing notes:\n{r.stdout.rstrip()}\n"
+              "If it repeats one of them: move what it adds into the existing note, then remove this one "
+              "(and its line in MEMORY.md). If the subject really is different, keep it.", file=sys.stderr)
     return 2
 
 
