@@ -99,6 +99,7 @@ Ce que nous avons fait :
    15 000 → 4 000 tokens). Claude Code compris, le démarrage passe d'environ 55 000 à 44 000 tokens,
    et ces ~11 000 tokens sont rendus à la conversation : sous le même plafond, l'agent garde plus de
    messages, de code lu et de résultats en vue avant de devoir passer par /clear.
+   Pour faire de même sur votre projet : `/alleger-demarrage` (voir la section sur l'intégration plus bas).
 3. **`mem` pour retrouver le reste à la demande** : ce qui n'est plus chargé d'office reste
    dans les notes, et l'agent le cherche quand il en a besoin, au lieu de tout garder en contexte.
    Une recherche coûte quelques secondes et quelques centaines de tokens de résultats ; garder
@@ -185,6 +186,18 @@ Le cycle proposé, avec les fichiers du dossier `integration/` :
    `integration/settings.json.extrait` à `~/.claude/settings.json`. À chaque session qui démarre
    après un /clear ou un /compact, son texte est ajouté au contexte : l'agent relit son point,
    fait sa section « À FAIRE EN PREMIER », et cherche avec `mem` avant d'affirmer un état passé.
+
+**Alléger CLAUDE.md et MEMORY.md (une fois, puis de temps en temps).** Ces deux fichiers sont relus à
+chaque échange ; tout le reste peut attendre dans des notes que `mem` retrouve à la demande. Copier
+`integration/alleger-demarrage.md` dans `~/.claude/commands/`, puis taper `/alleger-demarrage` : l'agent
+archive chaque CLAUDE.md mot pour mot, n'y garde que ce qui doit jouer à chaque échange (interdits et
+règles de sécurité, réflexes qui déclenchent une recherche, environnement indispensable), déplace
+l'historique, les incidents, les exemples et les procédures longues dans des notes, refait de MEMORY.md
+un index (une ligne par règle durable, aucun état de chantier), vérifie avec `mem verifier-perte`
+qu'aucune ligne n'est perdue, puis essaie trois recherches. Sans la commande, il suffit de demander à
+votre agent : *« Allège CLAUDE.md et MEMORY.md en suivant integration/alleger-demarrage.md de mem :
+archive d'abord, déplace sans réécrire, rien de perdu (mem verifier-perte), et montre-moi ce que tu as
+gardé. »* Relisez son compte rendu avant de vous y fier.
 
 ```mermaid
 flowchart LR

@@ -94,6 +94,7 @@ What we did:
    (47 KB → 12 KB, roughly 15,000 → 4,000 tokens). Claude Code included, startup goes from about 55,000
    to 44,000 tokens, and those ~11,000 tokens are given back to the conversation: under the same ceiling,
    the agent keeps more messages, code and results in view before it has to go through /clear.
+   To do the same on your project: `/alleger-demarrage` (see the integration section below).
 3. **`mem` to fetch the rest on demand**: what is no longer loaded up front stays in the notes, and
    the agent searches for it when needed instead of keeping everything in context. A search costs a
    few seconds and a few hundred tokens of results; keeping those notes in context cost their full
@@ -179,6 +180,17 @@ The suggested cycle, with the files in `integration/` (written in French; transl
    `integration/settings.json.extrait` into `~/.claude/settings.json`. Every session that starts after
    a /clear or /compact gets its text in context: the agent rereads its handover note, does its
    "do this first" section, and searches with `mem` before stating any past state.
+
+**Slimming CLAUDE.md and MEMORY.md (once, then from time to time).** These two files are reread on
+every turn; everything else can wait in notes that `mem` finds on demand. Copy
+`integration/alleger-demarrage.md` into `~/.claude/commands/` and type `/alleger-demarrage`: the agent
+archives each CLAUDE.md verbatim, keeps in it only what must apply on every turn (prohibitions and
+safety rules, the reflexes that trigger a search, the essential environment), moves history, incidents,
+examples and long procedures into notes, turns MEMORY.md back into an index (one line per lasting rule,
+no work state), checks with `mem check-loss` that no line was lost, then tests three searches. Without
+the command, you can simply ask your agent: *"Slim down CLAUDE.md and MEMORY.md following
+integration/alleger-demarrage.md from mem: archive first, move without rewriting, nothing lost (mem
+check-loss), and show me what you kept."* Review its report before relying on it.
 
 ```mermaid
 flowchart LR
