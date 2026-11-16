@@ -27,6 +27,15 @@ only reorders results, it never generates text. The optional hooks (below) only 
 to the context: the names of similar notes after a note is written, and, after /clear, a reminder to
 reread the handover note. Never an answer.
 
+**What `mem` is for, and what it is not for.** `mem` gives an agent a durable, checkable memory:
+rules, decisions, the state of a piece of work, the handover before /clear. Whatever matters is
+written in a note that a person can read, correct and commit, and every answer points back to
+`note:line`. It does not index conversation transcripts: to find something that was only said in an
+old conversation and never written down, use a tool that stores conversations verbatim, such as
+[MemPalace](https://github.com/MemPalace/mempalace) (ChromaDB, MCP server). The two can live side by
+side: raw history in one, working memory in `mem`. To compare search quality, measure on your own
+questions (`mem bench`).
+
 Every command and option has an English name (below) and a French one (`mem chercher`, `--vite`…):
 both work. Help and messages follow your locale (French if `LANG` starts with `fr`, English otherwise);
 `MEM_LANG=en` or `MEM_LANG=fr` forces one.

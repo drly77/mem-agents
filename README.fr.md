@@ -28,6 +28,15 @@ Les hooks facultatifs (plus bas) n'ajoutent que de courts avis au contexte : les
 voisines après l'écriture d'une note, et, après un /clear, le rappel de relire le point de reprise.
 Jamais une réponse.
 
+**À quoi sert `mem`, et à quoi il ne sert pas.** `mem` donne à un agent une mémoire durable et
+vérifiable : règles, décisions, état d'un chantier, point de reprise avant /clear. Ce qui compte est
+écrit dans une note qu'une personne peut relire, corriger et committer, et chaque réponse renvoie à
+`note:ligne`. Il n'indexe pas les transcriptions des conversations : pour retrouver une chose
+seulement dite dans une ancienne conversation, jamais écrite, il faut un outil qui garde les
+conversations mot pour mot, comme [MemPalace](https://github.com/MemPalace/mempalace) (ChromaDB,
+serveur MCP). Les deux peuvent cohabiter : l'historique brut dans l'un, la mémoire de travail dans
+`mem`. Pour comparer la qualité de recherche, mesurez sur vos propres questions (`mem bench`).
+
 Chaque commande et chaque option a aussi un nom anglais, qui marche de la même façon : `search`, `show`,
 `add`, `status`, `duplicates`, `neighbors`, `stale`, `handover`, `check-loss`, `index` ; `--dir`, `--fast`,
 `--in`, `--all`, `--since`, `--anyway`, `--threshold`, `--repo`, `--author`. L'aide et les messages suivent la
