@@ -18,6 +18,16 @@ il cherche avec `grep`, et rate tout ce qui est dit avec d'autres mots.
 Les notes restent la seule source : `mem` n'en tient qu'un index, refait dès qu'une note change.
 Aucun texte ne quitte la machine.
 
+**`mem` n'est pas un RAG.** Une chaîne RAG va chercher des passages, les colle d'elle-même dans
+l'invite du modèle, et lui fait rédiger une réponse à partir d'eux. `mem` s'arrête à la première
+étape : c'est une commande de recherche que l'agent lance quand il en a besoin, comme `grep`. Elle
+rend des passages classés, avec leur emplacement (`note:ligne`) ; aucun modèle ne rédige de réponse,
+et rien n'est ajouté à l'invite dans le dos de l'agent. L'agent lit les passages, ouvre la note au
+besoin, et la cite. Le reclassement ne fait que réordonner les résultats, il ne génère aucun texte.
+Les hooks facultatifs (plus bas) n'ajoutent que de courts avis au contexte : les noms des notes
+voisines après l'écriture d'une note, et, après un /clear, le rappel de relire le point de reprise.
+Jamais une réponse.
+
 Chaque commande et chaque option a aussi un nom anglais, qui marche de la même façon : `search`, `show`,
 `add`, `status`, `duplicates`, `neighbors`, `stale`, `handover`, `check-loss`, `index` ; `--dir`, `--fast`,
 `--in`, `--all`, `--since`, `--anyway`, `--threshold`, `--repo`, `--author`. L'aide et les messages suivent la

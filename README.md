@@ -18,6 +18,15 @@ it falls back to `grep`, and misses anything phrased with different words.
 The notes stay the only source of truth: `mem` only keeps an index, rebuilt whenever a note changes.
 No text leaves the machine.
 
+**`mem` is not a RAG.** A RAG pipeline retrieves passages, pastes them into the model's prompt on
+its own, and has the model write an answer from them. `mem` stops at the first step: it is a search
+command that the agent calls when it needs it, like `grep`. It returns ranked passages with their
+location (`note:line`); no model writes an answer, and nothing is added to the prompt behind the
+agent's back. The agent reads the passages, opens the note if needed, and cites it. The reranker
+only reorders results, it never generates text. The optional hooks (below) only add short notices
+to the context: the names of similar notes after a note is written, and, after /clear, a reminder to
+reread the handover note. Never an answer.
+
 Every command and option has an English name (below) and a French one (`mem chercher`, `--vite`…):
 both work. Help and messages follow your locale (French if `LANG` starts with `fr`, English otherwise);
 `MEM_LANG=en` or `MEM_LANG=fr` forces one.
