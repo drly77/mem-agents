@@ -38,7 +38,7 @@ transcriptions un historique qu'on consulte. Pour comparer la qualité de recher
 propres questions (`mem bench`).
 
 Chaque commande et chaque option a aussi un nom anglais, qui marche de la même façon : `search`, `show`,
-`add`, `status`, `duplicates`, `neighbors`, `stale`, `handover`, `check-loss`, `index` ; `--dir`, `--fast`,
+`add`, `status`, `duplicates`, `neighbors`, `stale`, `handover`, `check-loss`, `index`, `recall` ; `--dir`, `--fast`,
 `--in`, `--all`, `--since`, `--anyway`, `--threshold`, `--repo`, `--author`. L'aide et les messages suivent la
 langue du système (français si `LANG` commence par `fr`, anglais sinon) ; `MEM_LANG=fr` ou `MEM_LANG=en` l'impose.
 
@@ -53,6 +53,8 @@ mem doublons                                 # notes qui se répètent ou se con
 mem voisins project/x.md                     # notes qui disent déjà ce que dit x.md (hook : integration/mem-voisins-hook.py)
 mem perimes                                  # renvois morts : chemin, fichier, commit, note de l'index
 mem bench questions.tsv                      # top 1, top 3, MRR sur vos propres questions
+mem retrouver "pourquoi l'ancien relais ?"   # échanges passés (transcriptions de Claude Code), voir plus bas
+mem retrouver --voir 1a2b3c4d:120            # ce message et ses voisins
 mem point point.md                           # point de reprise neuf avant /clear ou /compact
 mem selftest
 ```

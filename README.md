@@ -50,6 +50,8 @@ mem duplicates                               # notes that repeat or contradict e
 mem neighbors project/x.md                   # notes that already say what x.md says (hook: integration/mem-voisins-hook.py)
 mem stale                                    # dead references: path, file, commit, index entry
 mem bench questions.tsv                      # top 1, top 3, MRR on your own questions
+mem recall "why did we drop the old relay?"  # past conversations (Claude Code transcripts), see below
+mem recall --show 1a2b3c4d:120               # that message and its neighbours
 mem handover point.md                        # new handover note before /clear or /compact
 mem selftest
 ```
