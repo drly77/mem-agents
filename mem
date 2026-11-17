@@ -1876,15 +1876,536 @@ def selftest() -> int:
                 os.environ.pop(cle, None)
             else:
                 os.environ[cle] = val
+    # mem retrouver : transcription factice, sans Ollama ni reclasseur.
+    with tempfile.TemporaryDirectory(prefix="mem-test-") as tmp:
+        maison = str(Path.home()).replace("/", "-")
+        projet = Path(tmp) / "src" / f"{maison}-src-app"
+        projet.mkdir(parents=True)
+        f = projet / "abcdef12-0000-0000-0000-000000000000.jsonl"
+
+        def ligne(type_, role, contenu, **extra):
+            d = {"type": type_, "timestamp": "2026-10-12T09:30:00.000Z", "message": {"role": role, "content": contenu}}
+            d.update(extra)
+            return json.dumps(d) + "\n"
+        f.write_text(
+            json.dumps({"type": "agent-name", "agentName": "agt-test"}) + "\n"
+            + ligne("user", "user", "on garde restic sur le serveur B, rotation de douze mois promise")
+            + ligne("assistant", "assistant", [{"type": "text", "text": "D'accord, restic reste sur le serveur B."},
+                                                {"type": "tool_use", "name": "Bash", "input": {"command": "zorglub"}}])
+            + ligne("user", "user", [{"type": "tool_result", "content": "sortie zorglub"}])
+            + ligne("user", "user", "<system-reminder>rappel zorglub</system-reminder>")
+            + ligne("user", "user", "skill zorglub", isMeta=True)
+            + ligne("user", "user", "This session is being continued from a previous conversation zorglub")
+            + ligne("user", "user", "notification zorglub", origin={"kind": "task-notification"})
+            + ligne("user", "user", f"le mot de passe du coffre est {FAUX} ; il expire en décembre")
+            + ligne("user", "user", "Another Claude session sent a message", isMeta=True,
+                    origin={"kind": "peer", "name": "agt-revue", "body": "relecture terminée, deux remarques"})
+            + ligne("user", "user", "[Salon — Alice · 101500] go pour la bascule"))
+        anciens = {k: os.environ.get(k) for k in ("MEM_SENS", "MEM_RECLASSER", "MEM_UTILISATEUR")}
+        os.environ.update(MEM_SENS="0", MEM_RECLASSER="0", MEM_UTILISATEUR="alice")
+        global CONV_BASE, CONV_SOURCE
+        ancienne_base, ancienne_source = CONV_BASE, CONV_SOURCE
+        CONV_BASE, CONV_SOURCE = Path(tmp) / "conv.db", Path(tmp) / "src"
+        ancien_canal = conv_canal
+        try:
+            globals()["conv_canal"] = lambda: re.compile(r"^\s*\[(Salon)\b[^\]]*\]\s*")
+            ajoutes, _, _ = conv_indexer(CONV_SOURCE, CONV_BASE)
+            cas(tr("retrouver : outils, rappels, skills, résumés, notifications hors de l'index",
+                   "recall: tools, reminders, skills, summaries, notifications kept out of the index"),
+                ajoutes == 5 and conv_chercher(CONV_BASE, "zorglub") == [])
+            cas(tr("retrouver : base créée en 0600", "recall: database created 0600"),
+                (CONV_BASE.stat().st_mode & 0o777) == 0o600)
+            coffre = conv_chercher(CONV_BASE, "coffre expire")
+            cas(tr("retrouver : secret d'un message masqué", "recall: secret in a message masked"),
+                bool(coffre) and FAUX not in coffre[0][5] and MASQUE in coffre[0][5])
+            auteurs = [(q, conv_chercher(CONV_BASE, q)[0][3]) for q in ("rotation douze mois", "restic reste",
+                                                                         "relecture remarques", "bascule")]
+            cas(tr("retrouver : auteur de chaque message (humain, agent, pair, canal)",
+                   "recall: author of each message (human, agent, peer, channel)"),
+                [a for _, a in auteurs] == ["alice", "agt-test", "pair:agt-revue", "alice (Salon)"])
+            cas(tr("retrouver : projet lu sans le dossier personnel", "recall: project read without the home folder"),
+                conv_chercher(CONV_BASE, "bascule")[0][6] == "src/app")
+            with open(f, "a") as h:
+                h.write(ligne("user", "user", "nouvelle décision : wireguard sur le relais"))
+                h.write('{"type": "user", "message": {"role": "user", "content": "ligne coup')
+            premiers = conv_indexer(CONV_SOURCE, CONV_BASE)[0], conv_indexer(CONV_SOURCE, CONV_BASE)[0]
+            with open(f, "a") as h:
+                h.write('ée en deux"}}\n')
+            cas(tr("retrouver : ajout au fil de l'eau, ligne incomplète gardée pour la fois suivante",
+                   "recall: incremental reading, incomplete line kept for next time"),
+                premiers == (1, 0) and conv_indexer(CONV_SOURCE, CONV_BASE)[0] == 1)
+            cas(tr("retrouver : filtres --qui, --depuis, --jusqua", "recall: --who, --since, --until filters"),
+                conv_chercher(CONV_BASE, "restic", qui="pair") == []
+                and conv_chercher(CONV_BASE, "restic", depuis="2026-11-01") == []
+                and bool(conv_chercher(CONV_BASE, "restic", jusqua="2026-10-12")))
+            import fcntl as _fcntl
+            with open(CONV_BASE.with_suffix(".sens.verrou"), "w") as v:
+                _fcntl.flock(v, _fcntl.LOCK_EX)
+                f.write_text(f.read_text() + ligne("user", "user", "encore un message"))
+                cas(tr("retrouver : un calcul du sens en cours ne bloque pas l'index des mots",
+                       "recall: an embeddings run in progress does not block the word index"),
+                    conv_indexer(CONV_SOURCE, CONV_BASE)[0] == 1)
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                rc = conv_voir(CONV_BASE, "abcdef12:2", autour=1)
+            cas(tr("retrouver --voir : le message et ses voisins", "recall --show: the message and its neighbours"),
+                rc == 0 and ">> abcdef12:2" in out.getvalue() and "agt-test" in out.getvalue())
+            cas(tr("retrouver : long message recoupé en passages bornés", "recall: long message cut into bounded passages"),
+                conv_morceaux("x" * 4000) == ["x" * 1500, "x" * 1500, "x" * 1000])
+        finally:
+            globals()["conv_canal"] = ancien_canal
+            CONV_BASE, CONV_SOURCE = ancienne_base, ancienne_source
+            for cle, val in anciens.items():
+                os.environ.pop(cle, None) if val is None else os.environ.update({cle: val})
     print("\n" + (tr("aucun échec", "no failures") if not echecs
                   else tr(f"{len(echecs)} échec(s)", f"{len(echecs)} failure(s)")))
     return 1 if echecs else 0
 
 
 # Noms anglais des commandes (les options anglaises sont déclarées à côté des françaises).
+# ---------------------------------------------------------------- mem retrouver : les échanges passés
+# mem chercher lit les notes ; mem retrouver lit ce qui a été dit et jamais écrit en note : la raison d'une
+# décision, les mots exacts de l'utilisateur, la réponse d'un autre agent. Source : les transcriptions de
+# Claude Code (~/.claude/projects/<projet>/<session>.jsonl). Un résultat est un indice daté, jamais un état.
+
+CONV_SOURCE = Path(os.environ.get("MEM_RETROUVER_SOURCE", Path.home() / ".claude" / "projects"))
+CONV_BASE = Path(os.environ.get("MEM_RETROUVER_DB", Path.home() / ".local" / "share" / "mem" / "conversations.db"))
+CONV_TAILLE = 1500  # caractères par passage ; un message plus long est recoupé aux lignes vides
+CONV_SENS_A_LA_VOLEE = 300  # une recherche calcule le sens des nouveaux passages s'ils sont peu nombreux
+# Fusion RRF : mots ×1, sens ×4. Réglé sur deux bancs (25 questions, 17/11/2026) : sens ×4 sans reclasseur,
+# MRR 0,69 et 0,74 ; mots seuls 0,24 et 0,78 ; le reclasseur n'y gagne rien et coûte ~6 s (--reclasser).
+CONV_POIDS_SENS = float(os.environ.get("MEM_RETROUVER_POIDS_SENS", "4"))
+CONV_BALISES = re.compile(
+    r"^\s*<(system-reminder|task-notification|command-name|command-message|command-args|local-command-stdout|"
+    r"local-command-caveat|bash-input|bash-stdout|bash-stderr|artifact-content[\w-]*|fork-boilerplate|"
+    r"user-prompt-submit-hook)\b")
+CONV_RAPPEL = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
+CONV_PAIR = re.compile(r'<cross-session-message\b[^>]*?from-name="([^"]+)"[^>]*>(.*?)</cross-session-message>', re.S)
+CONV_COLLE = re.compile(r"</?pasted_content[^>]*>")
+CONV_COMPACT = "This session is being continued"
+
+
+def conv_reglage(nom: str) -> list[str]:
+    """~/.config/mem/<nom> : une valeur par ligne (# commente) ; [] si absent."""
+    try:
+        texte = (Path.home() / ".config" / "mem" / nom).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    return [l.strip() for l in texte.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+
+
+def conv_utilisateur() -> str:
+    """Nom donné aux messages de l'humain : $MEM_UTILISATEUR, sinon ~/.config/mem/utilisateur, sinon « user »."""
+    return os.environ.get("MEM_UTILISATEUR") or next(iter(conv_reglage("utilisateur")), "") or tr("utilisateur", "user")
+
+
+def conv_canal() -> re.Pattern | None:
+    """Messages tapés par un canal (« [Salon — … · 101500] texte ») : noms dans ~/.config/mem/canaux."""
+    noms = conv_reglage("canaux")
+    if not noms:
+        return None
+    return re.compile(r"^\s*\[(" + "|".join(re.escape(n) for n in noms) + r")\b[^\]]*\]\s*")
+
+
+def conv_textes(contenu) -> list[str]:
+    if isinstance(contenu, str):
+        return [contenu]
+    return [x.get("text", "") for x in contenu or [] if isinstance(x, dict) and x.get("type") == "text"]
+
+
+def conv_messages(d: dict, agent: str, humain: str, canal: re.Pattern | None) -> list[tuple[str, str]]:
+    """(qui, texte) à indexer pour une ligne de transcription ; [] si elle n'a rien d'un échange."""
+    origine = d.get("origin") if isinstance(d.get("origin"), dict) else {}
+    if origine.get("kind") == "peer" and isinstance(origine.get("body"), str) and d.get("type") == "user":
+        return [(f"pair:{origine.get('name') or '?'}", origine["body"])]  # rangé en isMeta par Claude Code
+    if d.get("isSidechain") or d.get("isMeta") or d.get("isCompactSummary") or origine.get("kind") == "task-notification":
+        return []
+    m = d.get("message") or {}
+    role = m.get("role")
+    if d.get("type") == "assistant" and role == "assistant":
+        return [(agent or "agent", t) for t in conv_textes(m.get("content")) if t.strip()]
+    if d.get("type") != "user" or role != "user":
+        return []
+    sortie = []
+    for t in conv_textes(m.get("content")):
+        if t.lstrip().startswith(CONV_COMPACT) or CONV_BALISES.match(t):
+            continue
+        pairs = CONV_PAIR.findall(t)
+        if pairs:
+            sortie += [(f"pair:{nom}", corps.strip()) for nom, corps in pairs]
+            continue
+        t = CONV_RAPPEL.sub("", t)
+        par_canal = canal.match(t) if canal else None
+        if par_canal:
+            sortie.append((f"{humain} ({par_canal.group(1)})", t[par_canal.end():]))
+        elif "<pasted_content" in t:
+            sortie.append((tr(f"{humain} (collé)", f"{humain} (pasted)"), CONV_COLLE.sub("", t)))
+        elif t.strip():
+            sortie.append((humain, t))
+    return sortie
+
+
+def conv_morceaux(texte: str) -> list[str]:
+    """Recoupe un long message aux lignes vides, en passages de CONV_TAILLE au plus."""
+    blocs, courant = [], ""
+    for para in re.split(r"\n\s*\n", texte.strip()):
+        while len(para) > CONV_TAILLE:
+            if courant:
+                blocs.append(courant)
+                courant = ""
+            blocs.append(para[:CONV_TAILLE])
+            para = para[CONV_TAILLE:]
+        if courant and len(courant) + len(para) + 2 > CONV_TAILLE:
+            blocs.append(courant)
+            courant = para
+        else:
+            courant = f"{courant}\n\n{para}" if courant else para
+    if courant.strip():
+        blocs.append(courant)
+    return blocs
+
+
+def conv_filtrer(texte: str) -> tuple[str, int]:
+    """Texte passé au filtre de secrets de mem, et nombre de lignes retirées en entier."""
+    garde, retirees, dans_bloc = [], 0, False
+    for ligne in texte.splitlines():
+        if DEBUT_BLOC.search(ligne):
+            dans_bloc = True
+        if dans_bloc:
+            retirees += 1
+            if FIN_BLOC.search(ligne):
+                dans_bloc = False
+            continue
+        propre, _ = masquer(ligne)
+        if propre is None:
+            retirees += 1
+        else:
+            garde.append(propre)
+    return "\n".join(garde), retirees
+
+
+def conv_fichiers(source: Path) -> list[Path]:
+    # Seulement <projet>/<session>.jsonl : les sous-agents (<session>/subagents/…) restent dehors.
+    return sorted(source.glob("*/*.jsonl"))
+
+
+def conv_projet(dossier: str) -> str:
+    """« -home-alice-src-app » -> « src/app » : le dossier de travail de la session, sans le dossier personnel."""
+    maison = str(Path.home()).replace("/", "-") + "-"
+    return (dossier[len(maison):] if dossier.startswith(maison) else dossier.lstrip("-")).replace("-", "/") or dossier
+
+
+CONV_SCHEMA = """
+CREATE TABLE IF NOT EXISTS fichiers(chemin TEXT PRIMARY KEY, octet INTEGER, ligne INTEGER, agent TEXT);
+CREATE TABLE IF NOT EXISTS passages(id INTEGER PRIMARY KEY, session TEXT, projet TEXT, ligne INTEGER,
+    octet INTEGER, morceau INTEGER, date TEXT, agent TEXT, qui TEXT, texte TEXT);
+CREATE INDEX IF NOT EXISTS passages_session ON passages(session, ligne);
+CREATE VIRTUAL TABLE IF NOT EXISTS mots USING fts5(texte, qui, content='passages', content_rowid='id',
+    tokenize='unicode61 remove_diacritics 2');
+CREATE TABLE IF NOT EXISTS sens(id INTEGER PRIMARY KEY, v BLOB);
+CREATE TABLE IF NOT EXISTS info(cle TEXT PRIMARY KEY, valeur INTEGER);
+"""
+
+
+def conv_ouvrir(base: Path) -> sqlite3.Connection:
+    base.parent.mkdir(parents=True, exist_ok=True)
+    if not base.exists():
+        os.close(os.open(base, os.O_CREAT | os.O_WRONLY, 0o600))  # 0600 d'emblée, jamais avec l'umask
+    os.chmod(base, 0o600)
+    con = sqlite3.connect(base, timeout=120)
+    con.execute("PRAGMA journal_mode=WAL")
+    con.executescript(CONV_SCHEMA)
+    return con
+
+
+def conv_supprimer(con: sqlite3.Connection, ids: list[int]) -> None:
+    for i in ids:
+        r = con.execute("SELECT texte, qui FROM passages WHERE id = ?", (i,)).fetchone()
+        con.execute("INSERT INTO mots(mots, rowid, texte, qui) VALUES ('delete', ?, ?, ?)", (i, *r))
+        con.execute("DELETE FROM passages WHERE id = ?", (i,))
+        con.execute("DELETE FROM sens WHERE id = ?", (i,))
+
+
+def conv_lire_nouveau(con: sqlite3.Connection, chemin: Path, humain: str, canal) -> tuple[int, int]:
+    """Indexe les lignes complètes ajoutées depuis le dernier passage ; (passages, lignes retirées)."""
+    connu = con.execute("SELECT octet, ligne, agent FROM fichiers WHERE chemin = ?", (str(chemin),)).fetchone()
+    octet, num, agent = connu or (0, 0, "")
+    taille = chemin.stat().st_size
+    if taille < octet:  # fichier réécrit : on repart de zéro pour lui
+        conv_supprimer(con, [i for (i,) in con.execute("SELECT id FROM passages WHERE session = ?", (chemin.stem,))])
+        octet, num, agent = 0, 0, ""
+    if taille == octet:
+        return 0, 0
+    session, projet = chemin.stem, conv_projet(chemin.parent.name)
+    ajoutes = retirees = 0
+    with open(chemin, "rb") as f:
+        f.seek(octet)
+        for brut in f:
+            if not brut.endswith(b"\n"):
+                break  # ligne en cours d'écriture : la prochaine fois
+            debut = octet
+            octet += len(brut)
+            num += 1
+            try:
+                d = json.loads(brut)
+            except ValueError:
+                continue
+            if not isinstance(d, dict):
+                continue
+            if d.get("type") == "agent-name" and d.get("agentName"):
+                agent = d["agentName"]
+                continue
+            date = str(d.get("timestamp") or "")[:16].replace("T", " ")
+            for qui, texte in conv_messages(d, agent, humain, canal):
+                propre, r = conv_filtrer(texte)
+                retirees += r
+                for k, bout in enumerate(conv_morceaux(propre)):
+                    cur = con.execute(
+                        "INSERT INTO passages(session, projet, ligne, octet, morceau, date, agent, qui, texte) "
+                        "VALUES (?,?,?,?,?,?,?,?,?)", (session, projet, num, debut, k, date, agent, qui, bout))
+                    con.execute("INSERT INTO mots(rowid, texte, qui) VALUES (?,?,?)", (cur.lastrowid, bout, qui))
+                    ajoutes += 1
+    con.execute("INSERT OR REPLACE INTO fichiers VALUES (?,?,?,?)", (str(chemin), octet, num, agent))
+    return ajoutes, retirees
+
+
+def conv_sens(con: sqlite3.Connection, limite: int | None = None, bavard: bool = False) -> int:
+    """Vecteurs bge-m3 des passages qui n'en ont pas ; s'arrête sans erreur si Ollama ne répond pas."""
+    if not sens_actif():
+        return 0
+    a_faire = con.execute("SELECT p.id, p.texte FROM passages p LEFT JOIN sens s ON s.id = p.id "
+                          "WHERE s.id IS NULL").fetchall()
+    if limite is not None and len(a_faire) > limite:
+        return 0  # trop pour une recherche : « mem retrouver --indexer » s'en charge
+    faits = 0
+    for i in range(0, len(a_faire), SENS_LOT):
+        lot = a_faire[i:i + SENS_LOT]
+        if bavard and sys.stderr.isatty():
+            print(tr(f"\rmem : sens, {i}/{len(a_faire)} passages…", f"\rmem: embeddings, {i}/{len(a_faire)} passages…"),
+                  end="", file=sys.stderr, flush=True)
+        vs = vecteurs([t[:2000] for _, t in lot])
+        if vs is None:
+            break
+        con.executemany("INSERT OR REPLACE INTO sens VALUES (?, ?)", [(r[0], v.tobytes()) for r, v in zip(lot, vs)])
+        con.commit()
+        faits += len(lot)
+    if bavard and sys.stderr.isatty():
+        print("\r\033[K", end="", file=sys.stderr, flush=True)
+    return faits
+
+
+def conv_indexer(source: Path, base: Path, sens: bool = True, limite_sens: int | None = None,
+                 bavard: bool = False) -> tuple[int, int, int]:
+    """Ajoute les messages nouveaux de toutes les transcriptions ; (passages, lignes retirées, vecteurs).
+    Deux verrous : les mots sous verrou bloquant (court) ; le sens sous un verrou sans attente, pour qu'un long
+    calcul ne bloque pas les recherches, qui cherchent alors avec les vecteurs déjà faits."""
+    con = conv_ouvrir(base)
+    humain, canal = conv_utilisateur(), conv_canal()
+    with open(base.with_suffix(".verrou"), "w") as verrou:
+        fcntl.flock(verrou, fcntl.LOCK_EX)
+        ajoutes = retirees = 0
+        for chemin in conv_fichiers(source):
+            a, r = conv_lire_nouveau(con, chemin, humain, canal)
+            ajoutes, retirees = ajoutes + a, retirees + r
+            con.commit()
+        con.execute("INSERT INTO info VALUES ('retirees', ?) ON CONFLICT(cle) DO UPDATE SET valeur = valeur + ?",
+                    (retirees, retirees))
+        con.commit()
+    vecs = 0
+    if sens:
+        with open(base.with_suffix(".sens.verrou"), "w") as verrou:
+            try:
+                fcntl.flock(verrou, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                if bavard:
+                    print(tr("mem : sens déjà en calcul par un autre processus",
+                             "mem: embeddings already being computed by another process"), file=sys.stderr)
+            else:
+                vecs = conv_sens(con, limite_sens, bavard)
+    con.close()
+    return ajoutes, retirees, vecs
+
+
+def conv_filtres(qui, agent, depuis, jusqua, projet) -> tuple[str, list]:
+    sql, args = "", []
+    for colonne, valeur, motif in (("p.qui", qui, "{}%"), ("p.agent", agent, "{}"), ("p.projet", projet, "%{}%")):
+        if valeur:
+            sql += f" AND {colonne} LIKE ?"
+            args.append(motif.format(valeur))
+    if depuis:
+        sql += " AND p.date >= ?"
+        args.append(depuis)
+    if jusqua:
+        sql += " AND p.date < ?"
+        args.append(jusqua + "~")  # « 2026-10-31 » garde toute la journée
+    return sql, args
+
+
+def conv_chercher(base: Path, question: str, n: int = 5, qui=None, agent=None, depuis=None, jusqua=None,
+                  projet=None, reclasse: bool = False) -> list[tuple]:
+    """(session, ligne, date, qui, agent, texte, projet, morceau) : mots et sens fusionnés (RRF),
+    un seul passage par message, reclasseur de mem seulement sur demande."""
+    termes = termes_de(question)
+    con = sqlite3.connect(f"file:{base}?mode=ro", uri=True)
+    clause, valeurs = conv_filtres(qui, agent, depuis, jusqua, projet)
+    colonnes = "p.session, p.ligne, p.date, p.qui, p.agent, p.texte, p.projet, p.morceau"
+    par_mots, vus = [], set()
+    for operateur in ("AND", "OR"):
+        if len(par_mots) >= 100:
+            break
+        sql = (f"SELECT {colonnes} FROM mots JOIN passages p ON p.id = mots.rowid WHERE mots MATCH ?{clause} "
+               "ORDER BY bm25(mots) LIMIT 200")
+        for r in con.execute(sql, [requete_fts(termes, operateur), *valeurs]):
+            if (r[0], r[1], r[7]) not in vus:
+                vus.add((r[0], r[1], r[7]))
+                par_mots.append(r)
+    par_sens = []
+    q = vecteurs([question], delai=10) if sens_actif() else None
+    if q:
+        import numpy as np
+        lignes = con.execute(f"SELECT {colonnes}, s.v FROM passages p JOIN sens s ON s.id = p.id WHERE 1{clause}",
+                             valeurs).fetchall()
+        if lignes:
+            m = np.frombuffer(b"".join(r[8] for r in lignes), dtype=np.float32).reshape(len(lignes), -1)
+            cos = m @ q[0]
+            par_sens = [lignes[i][:8] for i in np.argsort(-cos)[:100]]
+    con.close()
+
+    score, ligne_de = collections.Counter(), {}
+    for poids_, liste in ((1.0, par_mots), (CONV_POIDS_SENS, par_sens)):
+        for rang, r in enumerate(liste[:100], start=1):
+            score[(r[0], r[1], r[7])] += poids_ / (K_RRF + rang)
+            ligne_de.setdefault((r[0], r[1], r[7]), r)
+    reclasse = reclasse and reclassement_actif()
+    resultats, messages = [], set()
+    for cle, _ in score.most_common():
+        r = ligne_de[cle]
+        if (r[0], r[1]) in messages:
+            continue  # un seul morceau par message : le mieux classé
+        messages.add((r[0], r[1]))
+        resultats.append(r)
+        if len(resultats) >= (max(n, K_RECLASSE) if reclasse else n):
+            break
+    if reclasse and len(resultats) > 1:
+        # reclasser lit r[0] — r[4] puis r[5] : on lui passe (date qui, …, agent, texte).
+        pour_mem = [(f"{r[2]} {r[3]}", r[1], r[2], "", r[4], r[5], 0) for r in resultats]
+        place = {id(x): i for i, x in enumerate(pour_mem)}
+        resultats = [resultats[place[id(x)]] for x in reclasser(question, pour_mem)]
+    return resultats[:n]
+
+
+def conv_extrait(texte: str, question: str, nb: int = 6) -> list[str]:
+    """Les nb lignes autour de celle qui porte le plus de mots de la question (le début, à défaut)."""
+    import unicodedata
+
+    def plat(s: str) -> str:
+        return "".join(c for c in unicodedata.normalize("NFD", s.lower()) if unicodedata.category(c) != "Mn")
+    lignes = [l for l in texte.splitlines() if l.strip()]
+    try:
+        racines = [plat(t)[:5] for t in termes_de(question)]
+    except SystemExit:
+        racines = []
+    compte = [sum(r in plat(l) for r in racines) for l in lignes]
+    meilleure = max(range(len(lignes)), key=lambda i: compte[i], default=0)
+    debut = max(0, min(meilleure - 1, len(lignes) - nb)) if compte and compte[meilleure] else 0
+    return lignes[debut:debut + nb]
+
+
+def conv_afficher(resultats: list[tuple], question: str = "") -> None:
+    if not resultats:
+        print(tr("aucun résultat", "no results"))
+        return
+    for session, ligne, date, qui, agent, texte, projet, _ in resultats:
+        chez = tr(f" (session de {agent})", f" (session of {agent})") if agent and not qui.startswith(agent) else ""
+        print(f"{session[:8]}:{ligne}  {date}  {qui}{chez}  [{projet}]")
+        for l in conv_extrait(texte, question):
+            print("    " + (l if len(l) <= 220 else l[:217] + "…"))
+        print()
+
+
+def conv_voir(base: Path, cible: str, autour: int = 3) -> int:
+    m = re.fullmatch(r"([0-9a-f-]{4,36}):(\d+)", cible)
+    if not m:
+        print(tr("mem retrouver --voir SESSION:LIGNE (tel qu'affiché par mem retrouver)",
+                 "mem recall --show SESSION:LINE (as printed by mem recall)"), file=sys.stderr)
+        return 2
+    con = sqlite3.connect(f"file:{base}?mode=ro", uri=True)
+    sessions = {s for (s,) in con.execute("SELECT DISTINCT session FROM passages WHERE session LIKE ?",
+                                          (m.group(1) + "%",))}
+    if len(sessions) != 1:
+        print(tr(f"mem : session {m.group(1)} " + ("inconnue" if not sessions else "ambiguë"),
+                 f"mem: session {m.group(1)} " + ("unknown" if not sessions else "ambiguous")), file=sys.stderr)
+        return 1
+    session, ligne = sessions.pop(), int(m.group(2))
+    lignes = [l for (l,) in con.execute("SELECT DISTINCT ligne FROM passages WHERE session = ? ORDER BY ligne",
+                                        (session,))]
+    if ligne not in lignes:
+        print(tr(f"mem : rien d'indexé à {session[:8]}:{ligne}", f"mem: nothing indexed at {session[:8]}:{ligne}"),
+              file=sys.stderr)
+        return 1
+    i = lignes.index(ligne)
+    choisies = lignes[max(0, i - autour): i + autour + 1]
+    marques = ",".join("?" * len(choisies))
+    for l, date, qui, texte in con.execute(
+            "SELECT ligne, date, qui, group_concat(texte, char(10) || char(10)) FROM "
+            f"(SELECT * FROM passages WHERE session = ? AND ligne IN ({marques}) ORDER BY ligne, morceau) "
+            "GROUP BY ligne, qui ORDER BY ligne", (session, *choisies)):
+        print(f"{'>>' if l == ligne else '  '} {session[:8]}:{l}  {date}  {qui}")
+        for t in texte.splitlines():
+            print("     " + t)
+        print()
+    return 0
+
+
+def conv_etat(base: Path, source: Path) -> int:
+    con = conv_ouvrir(base)
+    total = con.execute("SELECT count(*) FROM passages").fetchone()[0]
+    avec_sens = con.execute("SELECT count(*) FROM sens s JOIN passages p ON p.id = s.id").fetchone()[0]
+    retirees = (con.execute("SELECT valeur FROM info WHERE cle = 'retirees'").fetchone() or (0,))[0]
+    lus = con.execute("SELECT count(*) FROM fichiers").fetchone()[0]
+    print(tr(f"base : {base}", f"database: {base}"))
+    print(tr(f"transcriptions : {source} ({len(conv_fichiers(source))} fichiers, {lus} lus)",
+             f"transcripts: {source} ({len(conv_fichiers(source))} files, {lus} read)"))
+    print(tr(f"passages : {total}, avec sens : {avec_sens}, lignes retirées par le filtre de secrets : {retirees}",
+             f"passages: {total}, with embeddings: {avec_sens}, lines withheld by the secret filter: {retirees}"))
+    for qui, nb in con.execute("SELECT CASE WHEN qui LIKE 'pair:%' THEN 'pair:*' WHEN qui = agent OR qui = 'agent' "
+                               "THEN 'agents' ELSE qui END AS k, count(*) FROM passages GROUP BY k ORDER BY 2 DESC"):
+        print(f"  {qui} : {nb}")
+    if avec_sens < total:
+        print(tr("sens incomplet : « mem retrouver --indexer » le termine (Ollama et bge-m3 requis)",
+                 "embeddings incomplete: \"mem recall --index\" finishes them (Ollama and bge-m3 needed)"))
+    return 0
+
+
+def retrouver(args) -> int:
+    base, source = CONV_BASE, CONV_SOURCE
+    if args.etat:
+        return conv_etat(base, source)
+    if args.indexer:
+        a, r, v = conv_indexer(source, base, sens=not args.sans_sens, bavard=True)
+        print(tr(f"mem : {a} passages ajoutés, {r} lignes retirées (secrets), {v} vecteurs",
+                 f"mem: {a} passages added, {r} lines withheld (secrets), {v} embeddings"))
+        return 0
+    if args.voir:
+        return conv_voir(base, args.voir, args.autour)
+    if not args.question:
+        print(tr("mem retrouver : une question, ou --voir, --indexer, --etat",
+                 "mem recall: a question, or --show, --index, --status"), file=sys.stderr)
+        return 2
+    question = " ".join(args.question)
+    ajoutes, _, _ = conv_indexer(source, base, limite_sens=CONV_SENS_A_LA_VOLEE)
+    if ajoutes > 2000:
+        print(tr(f"mem : {ajoutes} passages ajoutés ; « mem retrouver --indexer » calcule leur sens",
+                 f"mem: {ajoutes} passages added; \"mem recall --index\" computes their embeddings"), file=sys.stderr)
+    conv_afficher(conv_chercher(base, question, args.n, args.qui, args.agent, args.depuis, args.jusqua, args.projet,
+                                reclasse=args.reclasser), question)
+    print(tr("Indice daté, pas un état : vérifier en direct avant de l'affirmer.",
+             "A dated clue, not current state: check live before stating it."), file=sys.stderr)
+    return 0
+
+
 COMMANDES_EN = {"search": "chercher", "show": "voir", "add": "ajouter", "neighbors": "voisins",
                 "index": "indexer", "status": "etat", "stale": "perimes", "duplicates": "doublons",
-                "handover": "point", "check-loss": "verifier-perte"}
+                "handover": "point", "check-loss": "verifier-perte", "recall": "retrouver"}
 
 
 def deux_noms(fr: str, en: str) -> tuple[str, str]:
@@ -1985,8 +2506,37 @@ def main(argv=None) -> int:
                                "nothing lost between two copies of a memory folder"))
     p.add_argument("avant", type=Path, metavar=tr("AVANT", "BEFORE"))
     p.add_argument("apres", type=Path, metavar=tr("APRES", "AFTER"))
+    r = commande(sub, "retrouver", "recall",
+                 help=tr("chercher dans les échanges passés (transcriptions de Claude Code)",
+                         "search past conversations (Claude Code transcripts)"))
+    r.add_argument("question", nargs="*", metavar=tr("mots", "words"))
+    r.add_argument("--n", type=int, default=5, help=tr("nombre de résultats", "number of results"))
+    r.add_argument(*deux_noms("--qui", "--who"), dest="qui", metavar=tr("QUI", "WHO"),
+                   help=tr("auteur du message : début du nom (utilisateur, pair:agt-dev, agt-coord…)",
+                           "message author: start of the name (user, pair:agt-dev, agt-coord…)"))
+    r.add_argument("--agent", help=tr("seulement les sessions de cet agent", "only this agent's sessions"))
+    r.add_argument(*deux_noms("--depuis", "--since"), dest="depuis", metavar=tr("AAAA-MM-JJ", "YYYY-MM-DD"))
+    r.add_argument(*deux_noms("--jusqua", "--until"), dest="jusqua", metavar=tr("AAAA-MM-JJ", "YYYY-MM-DD"),
+                   help=tr("jour compris", "day included"))
+    r.add_argument(*deux_noms("--projet", "--project"), dest="projet",
+                   help=tr("morceau du nom du projet", "part of the project name"))
+    r.add_argument(*deux_noms("--reclasser", "--rerank"), dest="reclasser", action="store_true",
+                   help=tr("reclasseur local en plus (~6 s, sans gain mesuré ici)",
+                           "local reranker too (~6 s, no measured gain here)"))
+    r.add_argument(*deux_noms("--voir", "--show"), dest="voir", metavar=tr("SESSION:LIGNE", "SESSION:LINE"),
+                   help=tr("le message et ses voisins", "the message and its neighbours"))
+    r.add_argument("--autour", "--around", dest="autour", type=int, default=3, help=argparse.SUPPRESS)
+    r.add_argument(*deux_noms("--indexer", "--index"), dest="indexer", action="store_true",
+                   help=tr("ajouter les nouveaux messages (le sens peut être long la 1re fois)",
+                           "add new messages (embeddings can take a while the first time)"))
+    r.add_argument(*deux_noms("--sans-sens", "--no-embeddings"), dest="sans_sens", action="store_true",
+                   help=argparse.SUPPRESS)
+    r.add_argument(*deux_noms("--etat", "--status"), dest="etat", action="store_true",
+                   help=tr("base, passages, lignes retirées", "database, passages, withheld lines"))
     args = ap.parse_args(argv)
     args.cmd = COMMANDES_EN.get(args.cmd, args.cmd)  # « mem search » = « mem chercher »
+    if args.cmd == "retrouver":
+        return retrouver(args)
 
     if args.cmd == "selftest":
         return selftest()

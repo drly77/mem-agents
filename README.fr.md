@@ -31,11 +31,11 @@ Jamais une réponse.
 **À quoi sert `mem`, et à quoi il ne sert pas.** `mem` donne à un agent une mémoire durable et
 vérifiable : règles, décisions, état d'un chantier, point de reprise avant /clear. Ce qui compte est
 écrit dans une note qu'une personne peut relire, corriger et committer, et chaque réponse renvoie à
-`note:ligne`. Il n'indexe pas les transcriptions des conversations : pour retrouver une chose
-seulement dite dans une ancienne conversation, jamais écrite, il faut un outil qui garde les
-conversations mot pour mot, comme [MemPalace](https://github.com/MemPalace/mempalace) (ChromaDB,
-serveur MCP). Les deux peuvent cohabiter : l'historique brut dans l'un, la mémoire de travail dans
-`mem`. Pour comparer la qualité de recherche, mesurez sur vos propres questions (`mem bench`).
+`note:ligne`. Pour une chose seulement dite dans une ancienne conversation, jamais écrite (la
+raison d'une décision, les mots exacts de l'utilisateur), `mem retrouver` cherche à part dans les
+transcriptions de Claude Code (voir plus bas) : les notes restent la mémoire de travail, les
+transcriptions un historique qu'on consulte. Pour comparer la qualité de recherche, mesurez sur vos
+propres questions (`mem bench`).
 
 Chaque commande et chaque option a aussi un nom anglais, qui marche de la même façon : `search`, `show`,
 `add`, `status`, `duplicates`, `neighbors`, `stale`, `handover`, `check-loss`, `index` ; `--dir`, `--fast`,
@@ -243,6 +243,38 @@ Limites de ces chiffres : un seul corpus, en français, d'un seul projet ; le ch
 fait sur ce banc et sur un second de 50 questions. Mesurez sur vos propres questions avec `mem bench`
 (format dans `exemples/questions.tsv`) avant de vous fier au reclassement.
 
+## Retrouver un échange passé : `mem retrouver`
+
+```
+mem retrouver "pourquoi la sauvegarde ne part pas du serveur"
+mem retrouver --qui alice --depuis 2026-10-01 "VM 112"      # seulement les messages de l'utilisateur
+mem retrouver --voir 1a2b3c4d:120                        # le message et ses voisins
+mem retrouver --indexer                                     # tout indexer d'un coup (le sens est long la 1re fois)
+mem retrouver --etat
+```
+
+Il lit les transcriptions de Claude Code (`~/.claude/projects/<projet>/<session>.jsonl`) et n'en
+garde que les échanges : les messages de l'utilisateur (tapés ou collés), ceux des autres sessions
+(messages entre agents) et le texte des réponses. Les sorties d'outils, les rappels système, les
+résumés de compaction, les contenus de skills et les sous-agents restent dehors. Chaque ligne passe
+par le même filtre de secrets que les notes. Les fichiers sont lus au fil de l'eau (seulement ce qui
+s'est ajouté) ; une recherche calcule le sens d'au plus 300 nouveaux passages, `--indexer` (par
+exemple toutes les heures dans une minuterie) fait le reste.
+
+Classement : mots (BM25) et sens (bge-m3) fusionnés, le sens pesant 4 fois plus que pour les notes :
+mesuré sur deux petits bancs de vraies questions (25 au total), c'est le meilleur réglage, et le
+reclasseur n'y gagnait rien (`--reclasser` pour l'essayer quand même). Ces chiffres viennent d'une
+seule installation : mesurez sur la vôtre.
+
+Limites. Un résultat est un indice daté, jamais l'état actuel : ce qui a été dit a pu changer depuis.
+L'index (`~/.local/share/mem/conversations.db`, 0600) contient vos conversations, secrets masqués
+mais tout le reste en clair : ne le donnez jamais à un service ou un agent distant. Seul le format de
+Claude Code est lu.
+
+Réglages propres : `~/.config/mem/utilisateur` (le nom affiché pour vos messages, sinon « user ») et
+`~/.config/mem/canaux` (préfixes de canal, un par ligne : « [Salon — Alice · 101500] texte » est
+alors rangé sous « alice (Salon) »).
+
 ## Secrets
 
 Une ligne qui ressemble à un secret (clé privée, jeton connu, `password: …`, URL à identifiants,
@@ -268,6 +300,10 @@ est requis » et reste visible. La seule règle sûre : ne pas écrire de secret
 | `MEM_PROJETS` | racines des mémoires par projet, séparées par « : » (sinon `~/.claude/projects` puis `~/.openclaude/projects`) |
 | `MEM_POINT_NOTE`, `MEM_POINT_ARCHIVE` | note du point de reprise et son archive (`project/point-de-reprise.md`, `archive/point-de-reprise.md`) |
 | `AGENT_NOM` | nom de l'agent : `mem ajouter` le note comme auteur, et `mem chercher` ne montre que ses notes et celles sans auteur (`--tous` pour toutes) |
+| `MEM_RETROUVER_DB` | base de `mem retrouver` (sinon `~/.local/share/mem/conversations.db`) |
+| `MEM_RETROUVER_SOURCE` | dossier des transcriptions (sinon `~/.claude/projects`) |
+| `MEM_RETROUVER_POIDS_SENS` | poids du sens dans la fusion de `mem retrouver` (4) |
+| `MEM_UTILISATEUR` | nom affiché pour vos messages (sinon `~/.config/mem/utilisateur`, ou « user ») |
 
 Synonymes propres à un projet : un groupe par ligne, mots séparés par des virgules.
 ```

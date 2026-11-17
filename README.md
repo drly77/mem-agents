@@ -30,11 +30,10 @@ reread the handover note. Never an answer.
 **What `mem` is for, and what it is not for.** `mem` gives an agent a durable, checkable memory:
 rules, decisions, the state of a piece of work, the handover before /clear. Whatever matters is
 written in a note that a person can read, correct and commit, and every answer points back to
-`note:line`. It does not index conversation transcripts: to find something that was only said in an
-old conversation and never written down, use a tool that stores conversations verbatim, such as
-[MemPalace](https://github.com/MemPalace/mempalace) (ChromaDB, MCP server). The two can live side by
-side: raw history in one, working memory in `mem`. To compare search quality, measure on your own
-questions (`mem bench`).
+`note:line`. For something that was only said in an old conversation and never written down (the
+reason for a decision, the user's exact words), `mem recall` searches Claude Code transcripts
+separately (see below): notes stay the working memory, transcripts a history you look things up in.
+To compare search quality, measure on your own questions (`mem bench`).
 
 Every command and option has an English name (below) and a French one (`mem chercher`, `--vite`…):
 both work. Help and messages follow your locale (French if `LANG` starts with `fr`, English otherwise);
@@ -236,6 +235,37 @@ Limits of these figures: a single corpus, in French, from a single project; the 
 on these sets. Measure on your own questions with `mem bench` (format in `exemples/questions.tsv`)
 before relying on reranking.
 
+## Finding a past conversation: `mem recall`
+
+```
+mem recall "why doesn't the backup run from the server"
+mem recall --who alice --since 2026-10-01 "VM 112"    # only the user's messages
+mem recall --show 1a2b3c4d:120                     # the message and its neighbours
+mem recall --index                                    # index everything at once (embeddings take a while the first time)
+mem recall --status
+```
+
+It reads Claude Code transcripts (`~/.claude/projects/<project>/<session>.jsonl`) and keeps only the
+conversation: the user's messages (typed or pasted), messages from other sessions (agent to agent)
+and the text of the replies. Tool output, system reminders, compaction summaries, skill contents and
+subagents stay out. Every line goes through the same secret filter as the notes. Files are read
+incrementally (only what was appended); a search embeds at most 300 new passages, `--index` (for
+instance hourly from a timer) does the rest.
+
+Ranking: words (BM25) and meaning (bge-m3) fused, with meaning weighted 4 times more than for notes:
+measured on two small benches of real questions (25 in total), this was the best setting, and the
+reranker gained nothing there (`--rerank` to try it anyway). These figures come from a single
+installation: measure on yours.
+
+Limits. A result is a dated clue, never the current state: what was said may have changed since.
+The index (`~/.local/share/mem/conversations.db`, 0600) holds your conversations, secrets masked but
+everything else in clear: never hand it to a remote service or agent. Only the Claude Code format is
+read.
+
+Own settings: `~/.config/mem/utilisateur` (the name shown for your messages, otherwise "user") and
+`~/.config/mem/canaux` (channel prefixes, one per line: "[Lounge — Alice · 101500] text" is then
+filed under "alice (Lounge)").
+
 ## Secrets
 
 A line that looks like a secret (private key, known token format, `password: …`, URL with credentials,
@@ -261,6 +291,10 @@ visible. The only reliable rule: do not write secrets into agent memory.
 | `MEM_PROJETS` | roots of per-project memories, separated by ":" (default `~/.claude/projects` then `~/.openclaude/projects`) |
 | `MEM_POINT_NOTE`, `MEM_POINT_ARCHIVE` | handover note and its archive (`project/point-de-reprise.md`, `archive/point-de-reprise.md`) |
 | `AGENT_NOM` | agent name: `mem add` records it as author, and `mem search` only shows that agent's notes and notes without an author (`--all` for all) |
+| `MEM_RETROUVER_DB` | `mem recall` database (otherwise `~/.local/share/mem/conversations.db`) |
+| `MEM_RETROUVER_SOURCE` | transcripts folder (otherwise `~/.claude/projects`) |
+| `MEM_RETROUVER_POIDS_SENS` | weight of meaning in `mem recall` fusion (4) |
+| `MEM_UTILISATEUR` | name shown for your messages (otherwise `~/.config/mem/utilisateur`, or "user") |
 
 Project-specific synonyms: one group per line, words separated by commas.
 ```
