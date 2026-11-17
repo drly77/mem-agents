@@ -1971,9 +1971,10 @@ CONV_SOURCE = Path(os.environ.get("MEM_RETROUVER_SOURCE", Path.home() / ".claude
 CONV_BASE = Path(os.environ.get("MEM_RETROUVER_DB", Path.home() / ".local" / "share" / "mem" / "conversations.db"))
 CONV_TAILLE = 1500  # caractères par passage ; un message plus long est recoupé aux lignes vides
 CONV_SENS_A_LA_VOLEE = 300  # une recherche calcule le sens des nouveaux passages s'ils sont peu nombreux
-# Fusion RRF : mots ×1, sens ×4. Réglé sur deux bancs (25 questions, 17/11/2026) : sens ×4 sans reclasseur,
-# MRR 0,69 et 0,74 ; mots seuls 0,24 et 0,78 ; le reclasseur n'y gagne rien et coûte ~6 s (--reclasser).
-CONV_POIDS_SENS = float(os.environ.get("MEM_RETROUVER_POIDS_SENS", "4"))
+# Fusion RRF : mots ×1, sens ×0,5, comme pour les notes. Trois bancs (54 questions, 17/11/2026) : ×0,5 et ×4
+# se valent en moyenne (~0,71 et ~0,69), ×0,5 gagne sur le jeu tenu à l'écart (0,78 contre 0,67) ; le reclasseur
+# n'y gagne rien et coûte ~6 s (--reclasser).
+CONV_POIDS_SENS = float(os.environ.get("MEM_RETROUVER_POIDS_SENS", "0.5"))
 CONV_BALISES = re.compile(
     r"^\s*<(system-reminder|task-notification|command-name|command-message|command-args|local-command-stdout|"
     r"local-command-caveat|bash-input|bash-stdout|bash-stderr|artifact-content[\w-]*|fork-boilerplate|"

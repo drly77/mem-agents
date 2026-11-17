@@ -263,8 +263,10 @@ par le même filtre de secrets que les notes. Les fichiers sont lus au fil de l'
 s'est ajouté) ; une recherche calcule le sens d'au plus 300 nouveaux passages, `--indexer` (par
 exemple toutes les heures dans une minuterie) fait le reste.
 
-Classement : mots (BM25) et sens (bge-m3) fusionnés, le sens pesant 4 fois plus que pour les notes :
-mesuré sur deux petits bancs de vraies questions (25 au total), c'est le meilleur réglage, et le
+Classement : mots (BM25) et sens (bge-m3) fusionnés, avec le même poids que pour les notes. Mesuré
+sur trois petits bancs de vraies questions (54 au total, MRR) : ce réglage et un sens 8 fois plus
+lourd se valent en moyenne (0,71 et 0,69) ; le sens lourd gagne sur les questions reformulées, perd
+sur les mots-clés, et perd sur le seul jeu tenu à l'écart du réglage (0,67 contre 0,78). Le
 reclasseur n'y gagnait rien (`--reclasser` pour l'essayer quand même). Ces chiffres viennent d'une
 seule installation : mesurez sur la vôtre.
 
@@ -304,7 +306,7 @@ est requis » et reste visible. La seule règle sûre : ne pas écrire de secret
 | `AGENT_NOM` | nom de l'agent : `mem ajouter` le note comme auteur, et `mem chercher` ne montre que ses notes et celles sans auteur (`--tous` pour toutes) |
 | `MEM_RETROUVER_DB` | base de `mem retrouver` (sinon `~/.local/share/mem/conversations.db`) |
 | `MEM_RETROUVER_SOURCE` | dossier des transcriptions (sinon `~/.claude/projects`) |
-| `MEM_RETROUVER_POIDS_SENS` | poids du sens dans la fusion de `mem retrouver` (4) |
+| `MEM_RETROUVER_POIDS_SENS` | poids du sens dans la fusion de `mem retrouver` (0.5) |
 | `MEM_UTILISATEUR` | nom affiché pour vos messages (sinon `~/.config/mem/utilisateur`, ou « user ») |
 
 Synonymes propres à un projet : un groupe par ligne, mots séparés par des virgules.

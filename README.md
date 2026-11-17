@@ -254,10 +254,12 @@ subagents stay out. Every line goes through the same secret filter as the notes.
 incrementally (only what was appended); a search embeds at most 300 new passages, `--index` (for
 instance hourly from a timer) does the rest.
 
-Ranking: words (BM25) and meaning (bge-m3) fused, with meaning weighted 4 times more than for notes:
-measured on two small benches of real questions (25 in total), this was the best setting, and the
-reranker gained nothing there (`--rerank` to try it anyway). These figures come from a single
-installation: measure on yours.
+Ranking: words (BM25) and meaning (bge-m3) fused, with the same weight as for notes. Measured on
+three small benches of real questions (54 in total, MRR): this setting and an 8 times heavier
+meaning weight are even on average (0.71 and 0.69); heavy meaning wins on rephrased questions, loses
+on keywords, and loses on the only set held out from tuning (0.67 against 0.78). The reranker gained
+nothing there (`--rerank` to try it anyway). These figures come from a single installation: measure
+on yours.
 
 Limits. A result is a dated clue, never the current state: what was said may have changed since.
 The index (`~/.local/share/mem/conversations.db`, 0600) holds your conversations, secrets masked but
@@ -295,7 +297,7 @@ visible. The only reliable rule: do not write secrets into agent memory.
 | `AGENT_NOM` | agent name: `mem add` records it as author, and `mem search` only shows that agent's notes and notes without an author (`--all` for all) |
 | `MEM_RETROUVER_DB` | `mem recall` database (otherwise `~/.local/share/mem/conversations.db`) |
 | `MEM_RETROUVER_SOURCE` | transcripts folder (otherwise `~/.claude/projects`) |
-| `MEM_RETROUVER_POIDS_SENS` | weight of meaning in `mem recall` fusion (4) |
+| `MEM_RETROUVER_POIDS_SENS` | weight of meaning in `mem recall` fusion (0.5) |
 | `MEM_UTILISATEUR` | name shown for your messages (otherwise `~/.config/mem/utilisateur`, or "user") |
 
 Project-specific synonyms: one group per line, words separated by commas.
