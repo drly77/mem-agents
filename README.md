@@ -110,8 +110,8 @@ after. The share of CLAUDE.md and MEMORY.md is estimated from their size; the re
 which varies with its version and enabled tools (we had also turned off unused connectors). At worst, a
 turn used to reread ~500,000 tokens; it now rereads ~250,000 at most.
 
-The handover note (`mem handover`) is what makes /clear safe: the agent restarts from an empty context,
-but with a state it wrote itself, and `mem` for everything else.
+The handover note (`mem handover`) is what makes /clear safe. After a /clear the agent has nothing
+in context, but it rereads the state it wrote down just before, and finds the rest with `mem`.
 
 ## How it works
 
@@ -276,7 +276,7 @@ A line that looks like a secret (private key, known token format, `password: …
 long random string…) does not enter the index: its value becomes `[masqué]`, or the line is dropped,
 and `mem status` counts it. This is a **safety net, not a guarantee**: a lowercase password inside a
 sentence ("the password is hunter") cannot be told apart from "the password is required" and stays
-visible. The only reliable rule: do not write secrets into agent memory.
+visible. The safest thing is still to never write a secret into agent memory.
 
 ## Settings
 

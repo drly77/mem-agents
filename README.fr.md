@@ -116,8 +116,9 @@ transcriptions de Claude Code) : 46 000 à 60 000 tokens sur 3 sessions d'avant,
 à Claude Code, dont la part varie avec sa version et les outils activés (nous avions aussi coupé des
 connecteurs inutilisés). Au pire, un tour relisait ~500 000 tokens ; il en relit au plus ~250 000.
 
-Le point de reprise (`mem point`) est ce qui rend le /clear sûr : l'agent repart d'un contexte
-vide, mais avec un état écrit par lui-même, et `mem` pour le reste.
+C'est le point de reprise (`mem point`) qui rend le /clear sans risque. Après le /clear, l'agent
+n'a plus rien en contexte, mais il relit l'état qu'il a noté lui-même juste avant, et il retrouve
+le reste avec `mem`.
 
 ## Comment ça marche
 
@@ -285,7 +286,7 @@ Une ligne qui ressemble à un secret (clé privée, jeton connu, `password: …`
 longue suite aléatoire…) n'entre pas dans l'index : sa valeur devient `[masqué]`, ou la ligne est
 retirée, et `mem etat` la compte. C'est un **filet**, pas une garantie : un mot de passe écrit en
 minuscules dans une phrase (« le mot de passe est hunter ») ne se distingue pas de « le mot de passe
-est requis » et reste visible. La seule règle sûre : ne pas écrire de secret dans la mémoire.
+est requis » et reste visible. Le plus sûr reste de ne jamais écrire de secret dans la mémoire.
 
 ## Réglages
 
