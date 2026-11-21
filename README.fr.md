@@ -13,8 +13,9 @@ l'agent ne peut plus tout relire : il se rabat sur `grep`, et passe à côté de
 - **par mots** : SQLite FTS5 (BM25), accents ignorés, titres et descriptions pesés plus lourd ;
 - **par le sens** (facultatif) : vecteurs bge-m3 calculés par un Ollama local ;
 - **avec reclassement** (facultatif) : les 10 premiers passages sont renotés par
-  Qwen3-Reranker-4B (llama.cpp par node-llama-cpp), sans aucun appel réseau ; quand le système le
-  permet, il tourne en plus enfermé sans réseau (`unshare -rn`, voir plus bas).
+  Qwen3-Reranker-4B, que `llama-server` (llama.cpp) garde chargé et qui note les 10 passages ensemble,
+  sans aucun appel réseau ; quand le système le permet, il tourne en plus enfermé sans réseau
+  (`unshare -rn`, voir plus bas).
 
 Les notes restent la seule source : `mem` n'en tient qu'un index, refait dès qu'une note change.
 Aucun texte ne quitte la machine.
@@ -147,7 +148,7 @@ flowchart LR
   Q --> S["index du sens<br/>bge-m3, Ollama local"]
   W --> F["fusion des deux classements<br/>RRF"]
   S --> F
-  F --> R["reclassement des 10 premiers<br/>Qwen3-Reranker-4B<br/>service mem-reclasseur, socket Unix"]
+  F --> R["reclassement des 10 premiers<br/>Qwen3-Reranker-4B, llama-server<br/>service mem-reclasseur, socket Unix"]
   R --> A["passages classés<br/>note:ligne"]
   N[("notes .md<br/>seule source de vérité")] -. "réindexées si elles changent" .-> W
   N -.-> S
@@ -156,7 +157,7 @@ flowchart LR
 - Les notes ne sont jamais modifiées par une recherche : `mem` tient à côté un index
   (`~/.local/share/mem/<projet>.db`), refait pour les seules notes qui ont changé.
 - Le sens et le reclassement sont facultatifs : sans Ollama, la recherche s'arrête aux mots ;
-  `--vite` s'arrête après la fusion (~0,3 s au lieu de ~7 s).
+  `--vite` s'arrête après la fusion (~0,3 s au lieu de ~3 à 4 s).
 - Tout reste sur la machine : Ollama en local, et le reclasseur ne fait aucun appel réseau.
 
 ## Installation
@@ -173,17 +174,23 @@ flowchart LR
 2. **La recherche par le sens** (facultatif) : [Ollama](https://ollama.com) en local, puis
    `ollama pull bge-m3`. Sans Ollama, `mem` cherche par mots seulement, sans erreur.
 
-3. **Le reclassement** (facultatif) : Node.js 20 ou plus, puis
+3. **Le reclassement** (facultatif) :
    ```
    cd reclasseur && ./installer.sh --service
    ```
-   Le script installe node-llama-cpp 3.20.0 (version exacte), télécharge le modèle depuis Hugging Face
-   (2,5 Go), vérifie son empreinte SHA-256 et, avec `--service`, active une unité systemd utilisateur
-   qui garde le modèle chargé. Sans le service, `mem` charge le modèle à chaque recherche (plus lent).
+   Le script télécharge `llama-server` (llama.cpp b12128, archive officielle pour Linux x86_64 avec
+   Vulkan) et le modèle Qwen3-Reranker-4B Q4_0 depuis Hugging Face (2,4 Go), vérifie leurs empreintes
+   SHA-256, fait un essai, puis, avec `--service`, active une unité systemd utilisateur qui garde le
+   modèle chargé et répond sur un socket Unix réservé à l'utilisateur. Sans carte graphique : `--cpu`.
+   Avec une autre version de llama.cpp (CUDA, ROCm, ARM…) : `--llama-server CHEMIN`. L'installateur est écrit pour Linux.
+   Service arrêté, `mem` classe par mots et sens, et le signale.
 
    Sur certains systèmes (par exemple Ubuntu 24.04), les espaces de noms non privilégiés sont bloqués :
    `unshare -rn` échoue, et l'installateur écrit alors l'unité sans lui. Le reclasseur ne fait de toute
    façon aucun appel réseau ; `unshare` n'est qu'une seconde barrière.
+
+   L'ancienne méthode, par Node.js et node-llama-cpp (`installer-node.sh`), marche encore, environ deux
+   fois plus lente : le modèle y note les passages un par un.
 
 ## Intégration à Claude Code : la mémoire, /compact et /clear
 
@@ -248,22 +255,22 @@ seuil, il demande à l'agent de lancer `/avant-clear`, avant que la session ne c
 ## Ce que ça coûte, ce que ça rapporte
 
 Nous avons fait les mesures sur un portable (Ryzen 7 8845HS, Radeon 780M intégrée, llama.cpp par
-Vulkan), avec une vraie mémoire de 182 notes.
+Vulkan), avec une vraie mémoire de 183 notes.
 
 | Mode | Durée d'une recherche |
 |---|---|
 | `--vite` (mots + sens) | ~0,3 s |
-| avec reclassement, service actif | ~6 à 8 s |
-| avec reclassement, sans service | ~9 s |
-| avec reclassement, processeur seul | ~38 s : utilisez `--vite` ou `MEM_RECLASSER=0` |
+| avec reclassement, service actif | ~3 à 4 s |
+| avec reclassement, processeur seul (`--cpu`) | ~17 à 22 s : utilisez `--vite` ou `MEM_RECLASSER=0` |
+| ancienne méthode Node.js, service actif | ~6 à 8 s |
 
 Qualité, sur un banc **privé** de 200 questions écrites par un autre agent à partir de cette mémoire
 (paraphrases, situations, états passés). MRR : moyenne de 1/rang de la bonne note (1 = toujours en tête).
 
 | | banc de 200 | banc de 50, servi aussi au choix du reclasseur |
 |---|---|---|
-| mots + sens | MRR 0,64 (114/200 en tête) | MRR 0,68 (31/50 en tête) |
-| mots + sens + reclassement | MRR 0,74 (139/200 en tête) | MRR 0,75 (35/50 en tête) |
+| mots + sens | MRR 0,64 (114/200 en tête) | MRR 0,71 (32/50 en tête) |
+| mots + sens + reclassement | MRR 0,73 (135/200 en tête) | MRR 0,76 (35/50 en tête) |
 
 Ces chiffres portent sur un seul corpus, en français, d'un seul projet, et le reclasseur a été choisi
 sur ce banc et sur un second de 50 questions. Avant de vous fier au reclassement, essayez-le sur vos
@@ -353,8 +360,8 @@ traitée comme un index et reste hors de la recherche par défaut ; `mem etat` l
 ## Contenu du dépôt
 
 - `mem` : le script, seul fichier indispensable ;
-- `reclasseur/` : le service de reclassement (Node.js) et son installateur ;
-- `systemd/` : l'unité utilisateur du reclasseur ;
+- `reclasseur/` : l'installateur du reclasseur (llama-server), et l'ancienne méthode par Node.js ;
+- `systemd/` : l'unité utilisateur du reclasseur (et celle de l'ancienne méthode) ;
 - `integration/` : de quoi brancher `mem` sur Claude Code (extraits de CLAUDE.md et de settings.json,
   hooks, procédure avant /clear, allègement du démarrage) ;
 - `exemples/` : une petite mémoire d'exemple et un banc de questions au format de `mem bench` ;
@@ -362,6 +369,6 @@ traitée comme un index et reste hors de la recherche par défaut ; `mem etat` l
 
 ## Licences
 
-`mem` : MIT (voir [LICENSE](LICENSE)). Modèles, téléchargés à l'installation et jamais fournis ici :
-bge-m3 (MIT, BAAI), Qwen3-Reranker-4B (Apache 2.0, Qwen) dans sa conversion GGUF de
+`mem` : MIT (voir [LICENSE](LICENSE)). Téléchargés à l'installation et jamais fournis ici :
+[llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT, ggml-org) ; les modèles bge-m3 (MIT, BAAI), Qwen3-Reranker-4B (Apache 2.0, Qwen) dans sa conversion GGUF de
 [giladgd](https://huggingface.co/giladgd/Qwen3-Reranker-4B-GGUF).

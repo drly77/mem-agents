@@ -29,8 +29,8 @@ courant ou de l'un de ses parents (racine git commune comprise, pour les
 worktrees). Aucun repli : hors projet, donner --dossier ou MEM_DIR.
 Base : $MEM_DB, sinon ~/.local/share/mem/<nom du dossier>.db (0600).
 Reclassement : les 10 premiers passages sont renotés par un petit modèle local
-(~/.local/share/mem/reclasseur, sans réseau : ~6-8 s par le service mem-reclasseur, ~9 s sans lui,
-au lieu de 0,3 s) ; --vite ou MEM_RECLASSER=0 s'en passent (aussi pour mem bench).
+(sans réseau : ~3-4 s par le service mem-reclasseur, llama-server ; sans lui, pas de reclassement,
+sauf ancienne méthode reclasser.mjs dans ~/.local/share/mem/reclasseur, ~9 s ; au lieu de 0,3 s) ; --vite ou MEM_RECLASSER=0 s'en passent (aussi pour mem bench).
 S'il échoue, mem le dit sur la sortie d'erreur et rend son classement par mots et sens.
 """
 
@@ -206,8 +206,8 @@ K_RRF, POIDS_SENS = 60, 0.5  # fusion des deux classements : Σ poids / (K_RRF +
 POIDS_TITRE = 2.0  # bm25 : texte ×1, titre ×POIDS_TITRE
 POIDS_DESCRIPTION = 1.5  # passage de description (ligne 1 d'une note avec en-tête)
 AGE_JOURNAL, FACTEUR_JOURNAL = 14, 0.6  # passage d'une note à POINT DE REPRISE plus vieux que AGE_JOURNAL jours
-# Reclassement : Qwen3-Reranker-4B par node-llama-cpp, seul juge de l'ordre des K_RECLASSE premiers passages
-# (banc privé de 200 questions : MRR 0,65 → 0,74 ; banc de 50 tenu à l'écart : 0,69 → 0,78).
+# Reclassement : Qwen3-Reranker-4B par llama-server (ou l'ancien node-llama-cpp), seul juge de l'ordre des K_RECLASSE premiers passages
+# (banc privé de 200 questions : MRR 0,64 → 0,73 ; banc de 50 : 0,71 → 0,76 ; mesures du 22/11/2026, llama-server).
 RECLASSEUR = Path(os.environ.get("MEM_RECLASSEUR", Path.home() / ".local" / "share" / "mem" / "reclasseur"))
 K_RECLASSE, DELAI_RECLASSE = 10, 60  # passages renotés ; secondes
 # Serveur qui garde le modèle chargé (llama-server --rerank, ou l'ancien serveur.mjs) : essayé d'abord ;
@@ -2019,7 +2019,7 @@ CONV_TAILLE = 1500  # caractères par passage ; un message plus long est recoup�
 CONV_SENS_A_LA_VOLEE = 300  # une recherche calcule le sens des nouveaux passages s'ils sont peu nombreux
 # Fusion RRF : mots ×1, sens ×0,5, comme pour les notes. Trois bancs (54 questions, 17/11/2026) : ×0,5 et ×4
 # se valent en moyenne (~0,71 et ~0,69), ×0,5 gagne sur le jeu tenu à l'écart (0,78 contre 0,67) ; le reclasseur
-# n'y gagne rien et coûte ~6 s (--reclasser).
+# n'y gagne rien et coûte ~3-4 s (--reclasser).
 CONV_POIDS_SENS = float(os.environ.get("MEM_RETROUVER_POIDS_SENS", "0.5"))
 CONV_BALISES = re.compile(
     r"^\s*<(system-reminder|task-notification|command-name|command-message|command-args|local-command-stdout|"
@@ -2491,8 +2491,8 @@ def main(argv=None) -> int:
                    help=tr("notes de tous les auteurs, et les dossiers de ~/.config/mem/dossiers",
                            "notes of every author, and the folders listed in ~/.config/mem/dossiers"))
     c.add_argument(*deux_noms("--vite", "--fast"), dest="vite", action="store_true",
-                   help=tr("sans reclassement par le modèle local (0,3 s au lieu de ~8 s)",
-                           "no reranking by the local model (0.3 s instead of ~8 s)"))
+                   help=tr("sans reclassement par le modèle local (0,3 s au lieu de ~3-4 s)",
+                           "no reranking by the local model (0.3 s instead of ~3-4 s)"))
     v = commande(sub, "voir", "show", parents=[commun],
                        help=tr("montrer un passage dans son contexte", "show a passage in context"))
     v.add_argument("cible", metavar=tr("fichier:ligne", "file:line"))
@@ -2568,8 +2568,8 @@ def main(argv=None) -> int:
     r.add_argument(*deux_noms("--projet", "--project"), dest="projet",
                    help=tr("morceau du nom du projet", "part of the project name"))
     r.add_argument(*deux_noms("--reclasser", "--rerank"), dest="reclasser", action="store_true",
-                   help=tr("reclasseur local en plus (~6 s, sans gain mesuré ici)",
-                           "local reranker too (~6 s, no measured gain here)"))
+                   help=tr("reclasseur local en plus (~3-4 s, sans gain mesuré ici)",
+                           "local reranker too (~3-4 s, no measured gain here)"))
     r.add_argument(*deux_noms("--voir", "--show"), dest="voir", metavar=tr("SESSION:LIGNE", "SESSION:LINE"),
                    help=tr("le message et ses voisins", "the message and its neighbours"))
     r.add_argument("--autour", "--around", dest="autour", type=int, default=3, help=argparse.SUPPRESS)

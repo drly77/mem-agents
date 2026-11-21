@@ -1,14 +1,16 @@
-# Reclasseur de mem : garde Qwen3-Reranker-4B chargé et répond sur un socket Unix 0600 ($XDG_RUNTIME_DIR/mem-reclasseur.sock),
-# sans accès réseau (unshare -rn) quand le système le permet. Arrêté, mem charge le modèle à chaque recherche (plus lent) ;
-# rien ne casse. Modèle écrit par reclasseur/installer.sh --service (@NODE@, @DEST@, @UNSHARE@ remplacés).
-# mem's reranker: keeps the model loaded, answers on a 0600 Unix socket, no network access when unshare is allowed.
+# Reclasseur de mem : llama-server (llama.cpp) garde Qwen3-Reranker-4B chargé et note les 10 passages ensemble,
+# sur un socket Unix ($XDG_RUNTIME_DIR/mem-reclasseur.sock, réservé à l'utilisateur), sans accès réseau (unshare -rn)
+# quand le système le permet. Arrêté, mem classe par mots et sens, ou passe par reclasser.mjs s'il est installé.
+# Modèle écrit par reclasseur/installer.sh --service (@UNSHARE@, @LLAMA@, @MODELE@ remplacés).
+# mem's reranker: llama-server keeps the model loaded and scores the 10 passages in one batch, on a user-only Unix socket.
 [Unit]
-Description=Reclasseur de mem (Qwen3-Reranker-4B gardé chargé, socket Unix)
+Description=Reclasseur de mem (llama-server, Qwen3-Reranker-4B, socket Unix)
 
 [Service]
 Type=simple
-WorkingDirectory=@DEST@
-ExecStart=@UNSHARE@@NODE@ serveur.mjs %t/mem-reclasseur.sock
+UMask=0077
+ExecStartPre=-/usr/bin/rm -f %t/mem-reclasseur.sock
+ExecStart=@UNSHARE@@LLAMA@ -m @MODELE@ --rerank -ngl 99 -np 10 -c 8192 --kv-unified -b 1024 -ub 1024 --no-webui --log-disable --host %t/mem-reclasseur.sock
 Restart=on-failure
 RestartSec=15
 Nice=5

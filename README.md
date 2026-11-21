@@ -12,8 +12,9 @@ everything: it falls back to `grep`, and misses whatever was written in other wo
 - **by words**: SQLite FTS5 (BM25), accent-insensitive, titles and descriptions weighted higher;
 - **by meaning** (optional): bge-m3 embeddings computed by a local Ollama;
 - **with reranking** (optional): the top 10 passages are rescored by Qwen3-Reranker-4B
-  (llama.cpp through node-llama-cpp), with no network calls; where the system allows it, it also runs
-  locked out of the network (`unshare -rn`, see below).
+  which `llama-server` (llama.cpp) keeps loaded and which scores the 10 passages in one batch, with no
+  network calls; where the system allows it, it also runs locked out of the network (`unshare -rn`,
+  see below).
 
 The notes stay the only source of truth: `mem` only keeps an index, rebuilt whenever a note changes.
 No text leaves the machine.
@@ -141,7 +142,7 @@ flowchart LR
   Q --> S["meaning index<br/>bge-m3, local Ollama"]
   W --> F["merge both rankings<br/>RRF"]
   S --> F
-  F --> R["rerank the top 10<br/>Qwen3-Reranker-4B<br/>mem-reclasseur service, Unix socket"]
+  F --> R["rerank the top 10<br/>Qwen3-Reranker-4B, llama-server<br/>mem-reclasseur service, Unix socket"]
   R --> A["ranked passages<br/>note:line"]
   N[("Markdown notes<br/>the only source of truth")] -. "reindexed when they change" .-> W
   N -.-> S
@@ -150,7 +151,7 @@ flowchart LR
 - A search never modifies the notes: `mem` keeps an index next to them
   (`~/.local/share/mem/<project>.db`), rebuilt only for the notes that changed.
 - Meaning and reranking are optional: without Ollama, search stops at words;
-  `--fast` stops after the merge (~0.3 s instead of ~7 s).
+  `--fast` stops after the merge (~0.3 s instead of ~3 to 4 s).
 - Everything stays on the machine: Ollama runs locally, and the reranker makes no network calls.
 
 ## Install
@@ -167,17 +168,23 @@ flowchart LR
 2. **Search by meaning** (optional): a local [Ollama](https://ollama.com), then `ollama pull bge-m3`.
    Without Ollama, `mem` searches by words only, without error.
 
-3. **Reranking** (optional): Node.js 20 or later, then
+3. **Reranking** (optional):
    ```
    cd reclasseur && ./installer.sh --service
    ```
-   It installs node-llama-cpp 3.20.0 (exact version), downloads the model from Hugging Face (2.5 GB),
-   checks its SHA-256 and, with `--service`, enables a systemd user unit that keeps the model loaded.
-   Without the service, `mem` loads the model on every search (slower).
+   The script downloads `llama-server` (llama.cpp b12128, the official Linux x86_64 Vulkan build) and
+   the Qwen3-Reranker-4B Q4_0 model from Hugging Face (2.4 GB), checks their SHA-256, runs a test, and,
+   with `--service`, enables a systemd user unit that keeps the model loaded and answers on a Unix
+   socket only the user can open. No GPU: `--cpu`. With another llama.cpp build (CUDA, ROCm, ARM…):
+   `--llama-server PATH`. The installer is written for Linux. When the service is stopped, `mem` ranks by words and meaning, and
+   says so.
 
    On some systems (Ubuntu 24.04 for instance), unprivileged user namespaces are blocked: `unshare -rn`
    fails, and the installer then writes the unit without it. The reranker makes no network calls anyway;
    `unshare` is only a second barrier.
+
+   The older method, through Node.js and node-llama-cpp (`installer-node.sh`), still works, about twice
+   as slow: there the model scores passages one at a time.
 
 ## Claude Code integration: memory, /compact and /clear
 
@@ -240,22 +247,22 @@ agent to run `/avant-clear`, before the session gets too expensive.
 ## Cost and benefit
 
 We ran the measurements on a laptop (Ryzen 7 8845HS, integrated Radeon 780M, llama.cpp over
-Vulkan), with a real memory of 182 notes.
+Vulkan), with a real memory of 183 notes.
 
 | Mode | Time per search |
 |---|---|
 | `--fast` (words + meaning) | ~0.3 s |
-| reranking, service running | ~6 to 8 s |
-| reranking, no service | ~9 s |
-| reranking, CPU only | ~38 s: use `--fast` or `MEM_RECLASSER=0` |
+| reranking, service running | ~3 to 4 s |
+| reranking, CPU only (`--cpu`) | ~17 to 22 s: use `--fast` or `MEM_RECLASSER=0` |
+| older Node.js method, service running | ~6 to 8 s |
 
 Quality, on a **private** benchmark of 200 questions written by another agent from that memory
 (paraphrases, situations, past states). MRR: mean of 1/rank of the right note (1 = always first).
 
 | | 200-question set | 50-question set, also used to choose the reranker |
 |---|---|---|
-| words + meaning | MRR 0.64 (114/200 ranked first) | MRR 0.68 (31/50 ranked first) |
-| words + meaning + reranking | MRR 0.74 (139/200 ranked first) | MRR 0.75 (35/50 ranked first) |
+| words + meaning | MRR 0.64 (114/200 ranked first) | MRR 0.71 (32/50 ranked first) |
+| words + meaning + reranking | MRR 0.73 (135/200 ranked first) | MRR 0.76 (35/50 ranked first) |
 
 These figures cover a single corpus, in French, from a single project, and the reranker was chosen
 on these sets. Before relying on reranking, try it on your own questions with `mem bench` (format in
@@ -347,8 +354,8 @@ treated as an index and left out of default searches; `mem status` lists it.
 ## Repository contents
 
 - `mem`: the script, the only file you need;
-- `reclasseur/`: the reranking service (Node.js) and its installer;
-- `systemd/`: the reranker's user unit;
+- `reclasseur/`: the reranker's installer (llama-server), and the older Node.js method;
+- `systemd/`: the reranker's user unit (and the older method's);
 - `integration/`: what you need to plug `mem` into Claude Code (CLAUDE.md and settings.json excerpts,
   hooks, the pre-/clear procedure, a slimmer startup);
 - `exemples/`: a small sample memory and a question set in `mem bench` format;
@@ -356,6 +363,6 @@ treated as an index and left out of default searches; `mem status` lists it.
 
 ## Licenses
 
-`mem`: MIT (see [LICENSE](LICENSE)). Models, downloaded at install time and never shipped here:
-bge-m3 (MIT, BAAI), Qwen3-Reranker-4B (Apache 2.0, Qwen) in its GGUF conversion by
+`mem`: MIT (see [LICENSE](LICENSE)). Downloaded at install time and never shipped here:
+[llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT, ggml-org); the models bge-m3 (MIT, BAAI), Qwen3-Reranker-4B (Apache 2.0, Qwen) in its GGUF conversion by
 [giladgd](https://huggingface.co/giladgd/Qwen3-Reranker-4B-GGUF).
