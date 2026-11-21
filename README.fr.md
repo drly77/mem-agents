@@ -121,6 +121,11 @@ Ce que nous avons fait :
    Une recherche coûte quelques secondes et quelques centaines de tokens de résultats ; garder
    ces notes en contexte coûtait leur taille entière à chaque tour.
 
+**D'où viennent les économies.** L'essentiel des gains de tokens annoncés vient des deux premières
+mesures : alléger CLAUDE.md et MEMORY.md, et plafonner le contexte à 250 k tokens. Ce sont de bonnes
+pratiques que vous pouvez appliquer sans installer `mem`. L'outil sert surtout à ne pas perdre
+l'accès à ce qu'on sort du démarrage.
+
 ![Avant et après : au pire 500 k puis 250 k tokens relus à chaque tour ; fichiers de démarrage 47 Ko → 12 Ko (−74 %) ; sous le plafond de 250 k, ~11 k tokens rendus à la conversation](docs/contexte.fr.svg)
 
 Les seuils sont exacts : compactage vers 500 000 tokens avant, plafond de 250 000 après. Les chiffres

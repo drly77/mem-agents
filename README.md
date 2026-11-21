@@ -115,6 +115,11 @@ What we did:
    few seconds and a few hundred tokens of results; keeping those notes in context cost their full
    size on every turn.
 
+**Where the savings come from.** Most of the token savings above come from the first two steps:
+slimming CLAUDE.md and MEMORY.md, and capping the context at 250k tokens. These are good practices
+you can apply without installing `mem`. The tool is mainly there so that what you move out of the
+startup files stays within reach.
+
 ![Before and after: at worst 500k then 250k tokens reread every turn; startup files 47 KB → 12 KB (−74%); under the 250k ceiling, ~11k tokens given back to the conversation](docs/context.en.svg)
 
 The thresholds are exact: compaction around 500,000 tokens before, a 250,000 ceiling after. The startup
