@@ -2,10 +2,11 @@
 
 *English: [README.md](README.md)*
 
-Claude Code (et OpenClaude) gardent une mémoire par projet : des notes Markdown dans
-`~/.claude/projects/<projet>/memory/`, avec un index `MEMORY.md` chargé à chaque session.
-Quand la mémoire dépasse quelques dizaines de notes, l'agent ne peut plus tout relire :
-il cherche avec `grep`, et rate tout ce qui est dit avec d'autres mots.
+Claude Code, comme OpenClaude, garde une mémoire pour chaque projet. Ce sont des notes Markdown
+rangées dans `~/.claude/projects/<projet>/memory/`, avec un index, `MEMORY.md`, que l'agent relit
+à chaque session. Tant que les notes sont peu nombreuses, tout va bien. Passé quelques dizaines,
+l'agent ne peut plus tout relire : il se rabat sur `grep`, et passe à côté de tout ce qui a été
+écrit avec d'autres mots.
 
 `mem` est un seul script Python qui cherche dans ces notes **en local** :
 
@@ -116,9 +117,9 @@ transcriptions de Claude Code) : 46 000 à 60 000 tokens sur 3 sessions d'avant,
 à Claude Code, dont la part varie avec sa version et les outils activés (nous avions aussi coupé des
 connecteurs inutilisés). Au pire, un tour relisait ~500 000 tokens ; il en relit au plus ~250 000.
 
-C'est le point de reprise (`mem point`) qui rend le /clear sans risque. Après le /clear, l'agent
-n'a plus rien en contexte, mais il relit l'état qu'il a noté lui-même juste avant, et il retrouve
-le reste avec `mem`.
+Sans point de reprise, un /clear ferait tout oublier à l'agent. Avec `mem point`, il note où il en
+est juste avant ; une fois la conversation vidée, il relit cette note et va chercher le reste avec
+`mem`.
 
 ## Comment ça marche
 
@@ -224,8 +225,8 @@ seuil, il demande à l'agent de lancer `/avant-clear`, avant que la session ne c
 
 ## Ce que ça coûte, ce que ça rapporte
 
-Mesuré sur un portable (Ryzen 7 8845HS, Radeon 780M intégrée, llama.cpp par Vulkan), sur une mémoire
-réelle de 182 notes :
+Nous avons fait les mesures sur un portable (Ryzen 7 8845HS, Radeon 780M intégrée, llama.cpp par
+Vulkan), avec une vraie mémoire de 182 notes.
 
 | Mode | Durée d'une recherche |
 |---|---|

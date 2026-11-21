@@ -2,10 +2,10 @@
 
 *Français : [README.fr.md](README.fr.md)*
 
-Claude Code (and OpenClaude) keep a per-project memory: Markdown notes in
-`~/.claude/projects/<project>/memory/`, with a `MEMORY.md` index loaded into every session.
-Once the memory grows past a few dozen notes, the agent can no longer reread it all:
-it falls back to `grep`, and misses anything phrased with different words.
+Claude Code, like OpenClaude, keeps a memory for each project. It is a set of Markdown notes in
+`~/.claude/projects/<project>/memory/`, plus a `MEMORY.md` index the agent rereads at every session.
+With a handful of notes, that works fine. Past a few dozen, the agent can no longer reread
+everything: it falls back to `grep`, and misses whatever was written in other words.
 
 `mem` is a single Python script that searches those notes **locally**:
 
@@ -111,8 +111,9 @@ after. The share of CLAUDE.md and MEMORY.md is estimated from their size; the re
 which varies with its version and enabled tools (we had also turned off unused connectors). At worst, a
 turn used to reread ~500,000 tokens; it now rereads ~250,000 at most.
 
-The handover note (`mem handover`) is what makes /clear safe. After a /clear the agent has nothing
-in context, but it rereads the state it wrote down just before, and finds the rest with `mem`.
+Without a handover note, a /clear would make the agent forget everything. With `mem handover`, it
+writes down where it stands just before; once the conversation is cleared, it rereads that note and
+looks up the rest with `mem`.
 
 ## How it works
 
@@ -216,8 +217,8 @@ agent to run `/avant-clear`, before the session gets too expensive.
 
 ## Cost and benefit
 
-Measured on a laptop (Ryzen 7 8845HS, integrated Radeon 780M, llama.cpp over Vulkan), on a real
-memory of 182 notes:
+We ran the measurements on a laptop (Ryzen 7 8845HS, integrated Radeon 780M, llama.cpp over
+Vulkan), with a real memory of 182 notes.
 
 | Mode | Time per search |
 |---|---|
