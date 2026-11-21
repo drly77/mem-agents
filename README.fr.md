@@ -19,6 +19,21 @@ l'agent ne peut plus tout relire : il se rabat sur `grep`, et passe à côté de
 Les notes restent la seule source : `mem` n'en tient qu'un index, refait dès qu'une note change.
 Aucun texte ne quitte la machine.
 
+## D'où vient `mem`
+
+Je travaille tous les jours avec un **système multi-agents** : plusieurs sessions Claude Code,
+chacune avec son rôle (coordination, développement, relecture, exploitation), qui s'échangent des
+messages, se passent le travail et partagent la même mémoire de projet. `mem` est né de cette
+expérience. La mémoire commune qui grossit, le contexte relu à chaque échange, les décisions
+oubliées après un /clear : je les ai rencontrés avant de chercher à les régler, et les chiffres de
+ce README ont été mesurés sur cette installation.
+
+Le code et la documentation ont été écrits avec ces agents. Je décide de ce qu'il faut faire, je
+valide les changements et je fais refaire les mesures ; les agents écrivent le code et les textes,
+se relisent entre eux et lancent les tests.
+
+## Ce que fait `mem`
+
 **`mem` s'arrête à la recherche.** Une chaîne RAG va chercher des passages, les colle d'elle-même dans
 l'invite du modèle, et lui fait rédiger une réponse à partir d'eux. `mem` ne fait que la première
 étape : c'est une commande de recherche que l'agent lance quand il en a besoin, comme `grep`. Elle
@@ -326,19 +341,6 @@ question demande le « dernier » état.
 Sur certains systèmes (par exemple Ubuntu 24.04), les espaces de noms non privilégiés sont bloqués :
 `unshare -rn` échoue, et l'installateur écrit alors l'unité sans lui. Le reclasseur ne fait de toute
 façon aucun appel réseau ; `unshare` n'est qu'une seconde barrière.
-
-## D'où vient `mem`
-
-Je travaille tous les jours avec un **système multi-agents** : plusieurs sessions Claude Code,
-chacune avec son rôle (coordination, développement, relecture, exploitation), qui s'échangent des
-messages, se passent le travail et partagent la même mémoire de projet. `mem` est né de cette
-expérience. La mémoire commune qui grossit, le contexte relu à chaque échange, les décisions
-oubliées après un /clear : je les ai rencontrés avant de chercher à les régler, et les chiffres de
-ce README ont été mesurés sur cette installation.
-
-Le code et la documentation ont été écrits avec ces agents. Je décide de ce qu'il faut faire, je
-valide les changements et je fais refaire les mesures ; les agents écrivent le code et les textes,
-se relisent entre eux et lancent les tests.
 
 ## Licences
 
