@@ -19,24 +19,22 @@ l'agent ne peut plus tout relire : il se rabat sur `grep`, et passe à côté de
 Les notes restent la seule source : `mem` n'en tient qu'un index, refait dès qu'une note change.
 Aucun texte ne quitte la machine.
 
-**`mem` n'est pas un RAG.** Une chaîne RAG va chercher des passages, les colle d'elle-même dans
-l'invite du modèle, et lui fait rédiger une réponse à partir d'eux. `mem` s'arrête à la première
+**`mem` s'arrête à la recherche.** Une chaîne RAG va chercher des passages, les colle d'elle-même dans
+l'invite du modèle, et lui fait rédiger une réponse à partir d'eux. `mem` ne fait que la première
 étape : c'est une commande de recherche que l'agent lance quand il en a besoin, comme `grep`. Elle
 rend des passages classés, avec leur emplacement (`note:ligne`) ; aucun modèle ne rédige de réponse,
 et rien n'est ajouté à l'invite dans le dos de l'agent. L'agent lit les passages, ouvre la note au
 besoin, et la cite. Le reclassement ne fait que réordonner les résultats, il ne génère aucun texte.
 Les hooks facultatifs (plus bas) n'ajoutent que de courts avis au contexte : les noms des notes
 voisines après l'écriture d'une note, et, après un /clear, le rappel de relire le point de reprise.
-Jamais une réponse.
 
-**À quoi sert `mem`, et à quoi il ne sert pas.** `mem` donne à un agent une mémoire durable et
+**Notes et conversations.** `mem` donne à un agent une mémoire durable et
 vérifiable : règles, décisions, état d'un chantier, point de reprise avant /clear. Ce qui compte est
 écrit dans une note qu'une personne peut relire, corriger et committer, et chaque réponse renvoie à
 `note:ligne`. Pour une chose seulement dite dans une ancienne conversation, jamais écrite (la
 raison d'une décision, les mots exacts de l'utilisateur), `mem retrouver` cherche à part dans les
 transcriptions de Claude Code (voir plus bas) : les notes restent la mémoire de travail, les
-transcriptions un historique qu'on consulte. Pour comparer la qualité de recherche, mesurez sur vos
-propres questions (`mem bench`).
+transcriptions un historique qu'on consulte.
 
 Chaque commande et chaque option a aussi un nom anglais, qui marche de la même façon : `search`, `show`,
 `add`, `status`, `duplicates`, `neighbors`, `stale`, `handover`, `check-loss`, `index`, `recall` ; `--dir`, `--fast`,
@@ -62,7 +60,7 @@ mem selftest
 
 ## Pourquoi cet outil
 
-`mem` est né d'un problème de coût, pas seulement de recherche. Dans Claude Code, **chaque échange
+`mem` est né d'un problème de coût autant que de recherche. Dans Claude Code, **chaque échange
 relit tout le contexte** : les fichiers chargés au démarrage (CLAUDE.md, MEMORY.md) et toute la
 conversation. Plus le contexte est gros, plus chaque tour coûte cher, en argent ou en quota.
 
@@ -92,7 +90,7 @@ Ce que nous avons fait :
    par un hook `Stop` qui n'est pas fourni ici (voir la fin de la section suivante).
    250 000 est le meilleur compromis **pour notre usage** : assez de place pour une tâche longue
    (lecture de code, tests, relectures) sans vider la session au milieu, assez peu pour que chaque
-   tour reste raisonnable. Ce n'est pas une valeur universelle : avec des tâches courtes, un seuil
+   tour reste raisonnable. Ce seuil dépend du travail : avec des tâches courtes, un seuil
    plus bas économise davantage ; avec de très gros fichiers à garder sous les yeux, il en faut
    plus. À adapter à votre besoin, en regardant ce que coûtent vos sessions.
 2. **Des fichiers chargés au démarrage réduits à l'essentiel** : CLAUDE.md passé de 23 Ko à 4 Ko
@@ -243,9 +241,9 @@ Qualité, sur un banc **privé** de 200 questions écrites par un autre agent à
 | mots + sens | MRR 0,64 (114/200 en tête) | MRR 0,68 (31/50 en tête) |
 | mots + sens + reclassement | MRR 0,74 (139/200 en tête) | MRR 0,75 (35/50 en tête) |
 
-Limites de ces chiffres : un seul corpus, en français, d'un seul projet ; le choix du reclasseur a été
-fait sur ce banc et sur un second de 50 questions. Mesurez sur vos propres questions avec `mem bench`
-(format dans `exemples/questions.tsv`) avant de vous fier au reclassement.
+Ces chiffres portent sur un seul corpus, en français, d'un seul projet, et le reclasseur a été choisi
+sur ce banc et sur un second de 50 questions. Avant de vous fier au reclassement, essayez-le sur vos
+propres questions avec `mem bench` (format dans `exemples/questions.tsv`).
 
 ## Retrouver un échange passé : `mem retrouver`
 
@@ -270,9 +268,9 @@ sur trois petits bancs de vraies questions (54 au total, MRR) : ce réglage et u
 lourd se valent en moyenne (0,71 et 0,69) ; le sens lourd gagne sur les questions reformulées, perd
 sur les mots-clés, et perd sur le seul jeu tenu à l'écart du réglage (0,67 contre 0,78). Le
 reclasseur n'y gagnait rien (`--reclasser` pour l'essayer quand même). Ces chiffres viennent d'une
-seule installation : mesurez sur la vôtre.
+seule installation.
 
-Limites. Un résultat est un indice daté, jamais l'état actuel : ce qui a été dit a pu changer depuis.
+Un résultat est un indice daté, jamais l'état actuel : ce qui a été dit a pu changer depuis.
 L'index (`~/.local/share/mem/conversations.db`, 0600) contient vos conversations, secrets masqués
 mais tout le reste en clair : ne le donnez jamais à un service ou un agent distant. Seul le format de
 Claude Code est lu.
@@ -285,7 +283,7 @@ alors rangé sous « alice (Salon) »).
 
 Une ligne qui ressemble à un secret (clé privée, jeton connu, `password: …`, URL à identifiants,
 longue suite aléatoire…) n'entre pas dans l'index : sa valeur devient `[masqué]`, ou la ligne est
-retirée, et `mem etat` la compte. C'est un **filet**, pas une garantie : un mot de passe écrit en
+retirée, et `mem etat` la compte. Ce masquage repose sur des formes reconnaissables et **en laisse passer** : un mot de passe écrit en
 minuscules dans une phrase (« le mot de passe est hunter ») ne se distingue pas de « le mot de passe
 est requis » et reste visible. Le plus sûr reste de ne jamais écrire de secret dans la mémoire.
 

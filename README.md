@@ -18,22 +18,21 @@ everything: it falls back to `grep`, and misses whatever was written in other wo
 The notes stay the only source of truth: `mem` only keeps an index, rebuilt whenever a note changes.
 No text leaves the machine.
 
-**`mem` is not a RAG.** A RAG pipeline retrieves passages, pastes them into the model's prompt on
-its own, and has the model write an answer from them. `mem` stops at the first step: it is a search
+**`mem` stops at search.** A RAG pipeline retrieves passages, pastes them into the model's prompt on
+its own, and has the model write an answer from them. `mem` only does the first step: it is a search
 command that the agent calls when it needs it, like `grep`. It returns ranked passages with their
 location (`note:line`); no model writes an answer, and nothing is added to the prompt behind the
 agent's back. The agent reads the passages, opens the note if needed, and cites it. The reranker
 only reorders results, it never generates text. The optional hooks (below) only add short notices
 to the context: the names of similar notes after a note is written, and, after /clear, a reminder to
-reread the handover note. Never an answer.
+reread the handover note.
 
-**What `mem` is for, and what it is not for.** `mem` gives an agent a durable, checkable memory:
+**Notes and conversations.** `mem` gives an agent a durable, checkable memory:
 rules, decisions, the state of a piece of work, the handover before /clear. Whatever matters is
 written in a note that a person can read, correct and commit, and every answer points back to
 `note:line`. For something that was only said in an old conversation and never written down (the
 reason for a decision, the user's exact words), `mem recall` searches Claude Code transcripts
 separately (see below): notes stay the working memory, transcripts a history you look things up in.
-To compare search quality, measure on your own questions (`mem bench`).
 
 Every command and option has an English name (below) and a French one (`mem chercher`, `--vite`…):
 both work. Help and messages follow your locale (French if `LANG` starts with `fr`, English otherwise);
@@ -58,7 +57,7 @@ mem selftest
 
 ## Why this tool
 
-`mem` came out of a cost problem, not only a search problem. In Claude Code, **every turn rereads the
+`mem` came out of a cost problem as much as a search problem. In Claude Code, **every turn rereads the
 whole context**: the files loaded at startup (CLAUDE.md, MEMORY.md) and the entire conversation.
 The bigger the context, the more each turn costs, in money or in quota.
 
@@ -88,7 +87,7 @@ What we did:
    here (see the end of the next section).
    250,000 is the best trade-off **for our use**: enough room for a long task (reading code, running
    tests, reviews) without clearing the session halfway, small enough to keep each turn reasonable.
-   It is not a universal value: with short tasks, a lower threshold saves more; with very large files
+   The right threshold depends on the work: with short tasks, a lower threshold saves more; with very large files
    to keep in view, you need more. Adapt it to your needs by watching what your sessions cost.
 2. **Startup files cut down to the essentials**: CLAUDE.md from 23 KB to 4 KB (the full old version
    archived), MEMORY.md from 111 to 43 lines (24 KB to 8 KB), older entries moved verbatim into
@@ -235,9 +234,9 @@ Quality, on a **private** benchmark of 200 questions written by another agent fr
 | words + meaning | MRR 0.64 (114/200 ranked first) | MRR 0.68 (31/50 ranked first) |
 | words + meaning + reranking | MRR 0.74 (139/200 ranked first) | MRR 0.75 (35/50 ranked first) |
 
-Limits of these figures: a single corpus, in French, from a single project; the reranker was chosen
-on these sets. Measure on your own questions with `mem bench` (format in `exemples/questions.tsv`)
-before relying on reranking.
+These figures cover a single corpus, in French, from a single project, and the reranker was chosen
+on these sets. Before relying on reranking, try it on your own questions with `mem bench` (format in
+`exemples/questions.tsv`).
 
 ## Finding a past conversation: `mem recall`
 
@@ -260,10 +259,10 @@ Ranking: words (BM25) and meaning (bge-m3) fused, with the same weight as for no
 three small benches of real questions (54 in total, MRR): this setting and an 8 times heavier
 meaning weight are even on average (0.71 and 0.69); heavy meaning wins on rephrased questions, loses
 on keywords, and loses on the only set held out from tuning (0.67 against 0.78). The reranker gained
-nothing there (`--rerank` to try it anyway). These figures come from a single installation: measure
-on yours.
+nothing there (`--rerank` to try it anyway). These figures come from a single
+installation.
 
-Limits. A result is a dated clue, never the current state: what was said may have changed since.
+A result is a dated clue, never the current state: what was said may have changed since.
 The index (`~/.local/share/mem/conversations.db`, 0600) holds your conversations, secrets masked but
 everything else in clear: never hand it to a remote service or agent. Only the Claude Code format is
 read.
@@ -276,7 +275,7 @@ filed under "alice (Lounge)").
 
 A line that looks like a secret (private key, known token format, `password: …`, URL with credentials,
 long random string…) does not enter the index: its value becomes `[masqué]`, or the line is dropped,
-and `mem status` counts it. This is a **safety net, not a guarantee**: a lowercase password inside a
+and `mem status` counts it. This masking relies on recognizable patterns and **lets some through**: a lowercase password inside a
 sentence ("the password is hunter") cannot be told apart from "the password is required" and stays
 visible. The safest thing is still to never write a secret into agent memory.
 
