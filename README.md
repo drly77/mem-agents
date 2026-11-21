@@ -323,6 +323,18 @@ On some systems (Ubuntu 24.04 for instance), unprivileged user namespaces are bl
 fails, and the installer then writes the unit without it. The reranker makes no network calls anyway;
 `unshare` is only a second barrier.
 
+## Where `mem` comes from
+
+I work every day with a **multi-agent system**: several Claude Code sessions, each with its own
+role (coordination, development, review, operations), that message each other, hand work over and
+share the same project memory. `mem` grew out of that experience. The shared memory that keeps
+growing, the context re-read at every exchange, the decisions lost after a /clear: I ran into each
+of them before trying to fix them, and the figures in this README were measured on that setup.
+
+The code and the documentation were written with these agents. I decide what needs doing, approve
+the changes and have the measurements re-run; the agents write the code and the text, review each
+other's work and run the tests.
+
 ## Licences
 
 `mem`: MIT (see [LICENSE](LICENSE)). Models, downloaded at install time and never shipped here:

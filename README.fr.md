@@ -329,6 +329,19 @@ Sur certains systèmes (par exemple Ubuntu 24.04), les espaces de noms non privi
 `unshare -rn` échoue, et l'installateur écrit alors l'unité sans lui. Le reclasseur ne fait de toute
 façon aucun appel réseau ; `unshare` n'est qu'une seconde barrière.
 
+## D'où vient `mem`
+
+Je travaille tous les jours avec un **système multi-agents** : plusieurs sessions Claude Code,
+chacune avec son rôle (coordination, développement, relecture, exploitation), qui s'échangent des
+messages, se passent le travail et partagent la même mémoire de projet. `mem` est né de cette
+expérience. La mémoire commune qui grossit, le contexte relu à chaque échange, les décisions
+oubliées après un /clear : je les ai rencontrés avant de chercher à les régler, et les chiffres de
+ce README ont été mesurés sur cette installation.
+
+Le code et la documentation ont été écrits avec ces agents. Je décide de ce qu'il faut faire, je
+valide les changements et je fais refaire les mesures ; les agents écrivent le code et les textes,
+se relisent entre eux et lancent les tests.
+
 ## Licences
 
 `mem` : MIT (voir [LICENSE](LICENSE)). Modèles, téléchargés à l'installation et jamais fournis ici :
