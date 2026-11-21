@@ -210,7 +210,8 @@ AGE_JOURNAL, FACTEUR_JOURNAL = 14, 0.6  # passage d'une note à POINT DE REPRISE
 # (banc privé de 200 questions : MRR 0,65 → 0,74 ; banc de 50 tenu à l'écart : 0,69 → 0,78).
 RECLASSEUR = Path(os.environ.get("MEM_RECLASSEUR", Path.home() / ".local" / "share" / "mem" / "reclasseur"))
 K_RECLASSE, DELAI_RECLASSE = 10, 60  # passages renotés ; secondes
-# Serveur qui garde le modèle chargé (serveur.mjs) : essayé d'abord ; absent, mem lance reclasser.mjs.
+# Serveur qui garde le modèle chargé (llama-server --rerank, ou l'ancien serveur.mjs) : essayé d'abord ;
+# absent, mem lance reclasser.mjs.
 # Jamais de repli dans /tmp : un autre utilisateur pourrait y préparer le chemin. Sans XDG_RUNTIME_DIR ni
 # MEM_RECLASSEUR_SOCKET, pas de serveur : mem charge le modèle lui-même.
 _SOCKET = os.environ.get("MEM_RECLASSEUR_SOCKET") or (
@@ -799,20 +800,43 @@ def node_pour_reclasser() -> str | None:
     return str(nvm[-1]) if nvm else None
 
 
-def noter_par_serveur(question: str, docs: list) -> list | None:
-    """Notes du serveur du reclasseur ; None s'il ne tourne pas (pas de socket, connexion refusée)."""
+def _noter_http(question: str, docs: list) -> list:
+    """llama-server (--rerank) sur le socket Unix : POST /v1/rerank, notes remises dans l'ordre des docs.
+    Lève http.client.HTTPException si le serveur ne parle pas HTTP (ancien serveur.mjs)."""
+    import http.client
     import socket
 
-    if SOCKET_RECLASSEUR is None or not SOCKET_RECLASSEUR.is_socket():
-        return None
+    class _Unix(http.client.HTTPConnection):
+        def connect(self):
+            self.sock = socket.socket(socket.AF_UNIX)
+            self.sock.settimeout(DELAI_RECLASSE)
+            self.sock.connect(str(SOCKET_RECLASSEUR))
+
+    c = _Unix("localhost", timeout=DELAI_RECLASSE)
+    try:
+        c.request("POST", "/v1/rerank", json.dumps({"query": question, "documents": docs, "top_n": len(docs)}),
+                  {"Content-Type": "application/json"})
+        r = c.getresponse()
+        corps = r.read()
+    finally:
+        c.close()
+    if r.status != 200:
+        raise ValueError(f"le serveur a répondu {r.status}")
+    notes = [None] * len(docs)
+    for x in json.loads(corps).get("results", []):
+        if isinstance(x.get("index"), int) and 0 <= x["index"] < len(docs):
+            notes[x["index"]] = x.get("relevance_score")
+    return notes
+
+
+def _noter_ligne(question: str, docs: list) -> list:
+    """Ancien serveur.mjs : une ligne JSON {q, docs} aller, une ligne de notes retour."""
+    import socket
+
     s = socket.socket(socket.AF_UNIX)
     s.settimeout(DELAI_RECLASSE)
-    try:
-        s.connect(str(SOCKET_RECLASSEUR))
-    except OSError:
-        s.close()
-        return None
     with s:
+        s.connect(str(SOCKET_RECLASSEUR))
         s.sendall((json.dumps({"q": question, "docs": docs}) + "\n").encode())
         recu = b""
         while not recu.endswith(b"\n"):
@@ -824,6 +848,28 @@ def noter_par_serveur(question: str, docs: list) -> list | None:
     if isinstance(notes, dict):
         raise ValueError("le serveur a refusé la demande")
     return notes
+
+
+def noter_par_serveur(question: str, docs: list) -> list | None:
+    """Notes du serveur du reclasseur ; None s'il ne tourne pas (pas de socket, connexion refusée).
+    llama-server (HTTP, 10 passages notés ensemble) d'abord ; s'il ne répond pas en HTTP, l'ancien serveur.mjs."""
+    import http.client
+    import socket
+
+    if SOCKET_RECLASSEUR is None or not SOCKET_RECLASSEUR.is_socket():
+        return None
+    try:
+        return _noter_http(question, docs)
+    except (ConnectionRefusedError, FileNotFoundError):
+        return None
+    except (http.client.HTTPException, ConnectionResetError, BrokenPipeError):
+        pass  # pas du HTTP : ancien serveur
+    try:
+        return _noter_ligne(question, docs)
+    except (ConnectionRefusedError, FileNotFoundError):
+        return None
+    except socket.timeout:
+        raise OSError("délai dépassé")
 
 
 def reclasser(question: str, resultats: list) -> list:
