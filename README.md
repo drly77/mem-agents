@@ -23,7 +23,7 @@ No text leaves the machine.
 I work every day with a **multi-agent system**: several Claude Code sessions, each with its own
 role (coordination, development, review, operations), that message each other, hand work over and
 share the same project memory. `mem` grew out of that experience. The shared memory that keeps
-growing, the context re-read at every exchange, the decisions lost after a /clear: I ran into each
+growing, the context reread on every turn, the decisions lost after a /clear: I ran into each
 of them before trying to fix them, and the figures in this README were measured on that setup.
 
 The code and the documentation were written with these agents. I decide what needs doing, approve
@@ -64,7 +64,7 @@ mem neighbors project/x.md                   # notes that already say what x.md 
 mem stale                                    # dead references: path, file, commit, index entry
 mem bench questions.tsv                      # top 1, top 3, MRR on your own questions
 mem recall "why did we drop the old relay?"  # past conversations (Claude Code transcripts), see below
-mem recall --show 1a2b3c4d:120               # that message and its neighbours
+mem recall --show 1a2b3c4d:120               # that message and its neighbors
 mem handover point.md                        # new handover note before /clear or /compact
 mem selftest
 ```
@@ -182,7 +182,7 @@ end of the conversation. Claude Code offers two ways to empty the context:
 - **/compact** replaces the conversation with a summary written by the model. The session goes on,
   but the summary loses details (commit ids, paths, the reason behind a decision).
 - **/clear** starts from an empty conversation. Only files remain: CLAUDE.md, MEMORY.md and the notes.
-  It is cheaper (every turn rereads the whole context) and cleaner, provided the agent wrote down what
+  It is cheaper (every turn rereads the whole context, which now starts almost empty) and cleaner, provided the agent wrote down what
   it needs to know beforehand.
 
 The suggested cycle, with the files in `integration/` (written in French; translate them freely):
@@ -223,7 +223,7 @@ flowchart LR
   L --> T
 ```
 
-`mem` recognises these notes ("POINT DE REPRISE"): older ones rank below lasting rules, unless the
+`mem` recognizes these notes ("POINT DE REPRISE"): older ones rank below lasting rules, unless the
 question asks for the "latest" state. Several agents on one project:
 `mem handover --note project/point-<agent>.md --archive archive/point-<agent>.md --author <agent>`,
 or `MEM_POINT_NOTE` and `MEM_POINT_ARCHIVE` in each agent's environment (the hook reads
@@ -260,8 +260,8 @@ on these sets. Before relying on reranking, try it on your own questions with `m
 
 ```
 mem recall "why doesn't the backup run from the server"
-mem recall --who alice --since 2026-10-01 "VM 112"    # only the user's messages
-mem recall --show 1a2b3c4d:120                     # the message and its neighbours
+mem recall --who alice --since 2026-10-01 "VM 112"    # only messages from alice (your user name)
+mem recall --show 1a2b3c4d:120                        # the message and its neighbors
 mem recall --index                                    # index everything at once (embeddings take a while the first time)
 mem recall --status
 ```
@@ -285,14 +285,14 @@ The index (`~/.local/share/mem/conversations.db`, 0600) holds your conversations
 everything else in clear: never hand it to a remote service or agent. Only the Claude Code format is
 read.
 
-Own settings: `~/.config/mem/utilisateur` (the name shown for your messages, otherwise "user") and
+Two optional files: `~/.config/mem/utilisateur` (the name shown for your messages, otherwise "user") and
 `~/.config/mem/canaux` (channel prefixes, one per line: "[Lounge — Alice · 101500] text" is then
 filed under "alice (Lounge)").
 
 ## Secrets
 
 A line that looks like a secret (private key, known token format, `password: …`, URL with credentials,
-long random string…) does not enter the index: its value becomes `[masqué]`, or the line is dropped,
+long random string…) does not enter the index: its value becomes `[masqué]` ("masked"), or the line is dropped,
 and `mem status` counts it. This masking relies on recognizable patterns and **lets some through**: a lowercase password inside a
 sentence ("the password is hunter") cannot be told apart from "the password is required" and stays
 visible. The safest thing is still to never write a secret into agent memory.
@@ -333,7 +333,7 @@ by meaning, but benefit less from those helpers.
 A question asking for the "latest", "current" or "recent" state (« dernier », « actuel », « récent ») is neither
 searched by meaning nor reranked: dates matter more than closeness of meaning there, and `mem` puts the most recent passages first.
 
-Recognised conventions: the YAML front matter of Claude Code notes (`name`, `description`,
+Recognized conventions: the YAML front matter of Claude Code notes (`name`, `description`,
 `metadata.type`), dates at the start of an entry (`- 08/11 …`, `## 2026-11-08`), and handover notes
 ("POINT DE REPRISE") treated as a log: their old passages rank below rules, unless the question asks
 for the "latest" (« dernier ») state. A note at the root of the memory folder without `type:` is
@@ -349,7 +349,7 @@ treated as an index and left out of default searches; `mem status` lists it.
 - `exemples/`: a small sample memory and a question set in `mem bench` format;
 - `docs/`: the context diagrams.
 
-## Licences
+## Licenses
 
 `mem`: MIT (see [LICENSE](LICENSE)). Models, downloaded at install time and never shipped here:
 bge-m3 (MIT, BAAI), Qwen3-Reranker-4B (Apache 2.0, Qwen) in its GGUF conversion by

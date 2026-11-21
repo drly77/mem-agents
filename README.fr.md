@@ -188,7 +188,7 @@ elle survit à la fin de la conversation. Claude Code offre deux façons de la v
 - **/compact** remplace la conversation par un résumé écrit par le modèle. La session continue, mais
   le résumé perd des détails (identifiants de commits, chemins, raisons d'une décision).
 - **/clear** repart d'une conversation vide. Il ne reste que les fichiers : CLAUDE.md, MEMORY.md et
-  les notes. C'est plus économique (chaque échange relit tout le contexte) et plus net, à condition
+  les notes. C'est plus économique (chaque échange relit tout le contexte, qui repart presque vide) et plus net, à condition
   que l'agent ait écrit ce qu'il doit savoir avant.
 
 Le cycle proposé, avec les fichiers du dossier `integration/` :
@@ -268,7 +268,7 @@ propres questions avec `mem bench` (format dans `exemples/questions.tsv`).
 
 ```
 mem retrouver "pourquoi la sauvegarde ne part pas du serveur"
-mem retrouver --qui alice --depuis 2026-10-01 "VM 112"      # seulement les messages de l'utilisateur
+mem retrouver --qui alice --depuis 2026-10-01 "VM 112"      # seulement les messages d'alice (votre nom d'utilisateur)
 mem retrouver --voir 1a2b3c4d:120                        # le message et ses voisins
 mem retrouver --indexer                                     # tout indexer d'un coup (le sens est long la 1re fois)
 mem retrouver --etat
@@ -294,7 +294,7 @@ L'index (`~/.local/share/mem/conversations.db`, 0600) contient vos conversations
 mais tout le reste en clair : ne le donnez jamais à un service ou un agent distant. Seul le format de
 Claude Code est lu.
 
-Réglages propres : `~/.config/mem/utilisateur` (le nom affiché pour vos messages, sinon « user ») et
+Deux fichiers facultatifs : `~/.config/mem/utilisateur` (le nom affiché pour vos messages, sinon « user ») et
 `~/.config/mem/canaux` (préfixes de canal, un par ligne : « [Salon — Alice · 101500] texte » est
 alors rangé sous « alice (Salon) »).
 
