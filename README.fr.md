@@ -40,7 +40,7 @@ l'invite du modèle, et lui fait rédiger une réponse à partir d'eux. `mem` ne
 rend des passages classés, avec leur emplacement (`note:ligne`) ; aucun modèle ne rédige de réponse,
 et rien n'est ajouté à l'invite dans le dos de l'agent. L'agent lit les passages, ouvre la note au
 besoin, et la cite. Le reclassement ne fait que réordonner les résultats, il ne génère aucun texte.
-Les hooks facultatifs (plus bas) n'ajoutent que de courts avis au contexte : les noms des notes
+Les hooks fournis, tous facultatifs (plus bas), n'ajoutent que de courts avis au contexte : les noms des notes
 voisines après l'écriture d'une note, et, après un /clear, le rappel de relire le point de reprise.
 
 **Notes et conversations.** `mem` donne à un agent une mémoire durable et
@@ -175,6 +175,10 @@ flowchart LR
    Le script installe node-llama-cpp 3.20.0 (version exacte), télécharge le modèle depuis Hugging Face
    (2,5 Go), vérifie son empreinte SHA-256 et, avec `--service`, active une unité systemd utilisateur
    qui garde le modèle chargé. Sans le service, `mem` charge le modèle à chaque recherche (plus lent).
+
+   Sur certains systèmes (par exemple Ubuntu 24.04), les espaces de noms non privilégiés sont bloqués :
+   `unshare -rn` échoue, et l'installateur écrit alors l'unité sans lui. Le reclasseur ne fait de toute
+   façon aucun appel réseau ; `unshare` n'est qu'une seconde barrière.
 
 ## Intégration à Claude Code : la mémoire, /compact et /clear
 
@@ -324,6 +328,8 @@ est requis » et reste visible. Le plus sûr reste de ne jamais écrire de secre
 | `MEM_RETROUVER_POIDS_SENS` | poids du sens dans la fusion de `mem retrouver` (0.5) |
 | `MEM_UTILISATEUR` | nom affiché pour vos messages (sinon `~/.config/mem/utilisateur`, ou « user ») |
 
+### Synonymes, dates et conventions
+
 Synonymes propres à un projet : un groupe par ligne, mots séparés par des virgules.
 ```
 relecteur, relecture, revue-de-code
@@ -336,11 +342,18 @@ la date y compte plus que la proximité de sens, et `mem` met alors les passages
 Conventions reconnues : l'en-tête YAML des notes Claude Code (`name`, `description`, `metadata.type`),
 les dates en tête d'entrée (`- 08/11 …`, `## 2026-11-08`), et les notes de reprise (« POINT DE
 REPRISE ») traitées comme un journal : leurs vieux passages passent derrière les règles, sauf si la
-question demande le « dernier » état.
+question demande le « dernier » état. Une note posée à la racine de la mémoire sans `type:` est
+traitée comme un index et reste hors de la recherche par défaut ; `mem etat` la signale.
 
-Sur certains systèmes (par exemple Ubuntu 24.04), les espaces de noms non privilégiés sont bloqués :
-`unshare -rn` échoue, et l'installateur écrit alors l'unité sans lui. Le reclasseur ne fait de toute
-façon aucun appel réseau ; `unshare` n'est qu'une seconde barrière.
+## Contenu du dépôt
+
+- `mem` : le script, seul fichier indispensable ;
+- `reclasseur/` : le service de reclassement (Node.js) et son installateur ;
+- `systemd/` : l'unité utilisateur du reclasseur ;
+- `integration/` : de quoi brancher `mem` sur Claude Code (extraits de CLAUDE.md et de settings.json,
+  hooks, procédure avant /clear, allègement du démarrage) ;
+- `exemples/` : une petite mémoire d'exemple et un banc de questions au format de `mem bench` ;
+- `docs/` : les schémas du contexte.
 
 ## Licences
 

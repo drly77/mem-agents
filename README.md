@@ -37,7 +37,7 @@ its own, and has the model write an answer from them. `mem` only does the first 
 command that the agent calls when it needs it, like `grep`. It returns ranked passages with their
 location (`note:line`); no model writes an answer, and nothing is added to the prompt behind the
 agent's back. The agent reads the passages, opens the note if needed, and cites it. The reranker
-only reorders results, it never generates text. The optional hooks (below) only add short notices
+only reorders results, it never generates text. The hooks provided, all optional (below), only add short notices
 to the context: the names of similar notes after a note is written, and, after /clear, a reminder to
 reread the handover note.
 
@@ -169,6 +169,10 @@ flowchart LR
    It installs node-llama-cpp 3.20.0 (exact version), downloads the model from Hugging Face (2.5 GB),
    checks its SHA-256 and, with `--service`, enables a systemd user unit that keeps the model loaded.
    Without the service, `mem` loads the model on every search (slower).
+
+   On some systems (Ubuntu 24.04 for instance), unprivileged user namespaces are blocked: `unshare -rn`
+   fails, and the installer then writes the unit without it. The reranker makes no network calls anyway;
+   `unshare` is only a second barrier.
 
 ## Claude Code integration: memory, /compact and /clear
 
@@ -315,6 +319,8 @@ visible. The safest thing is still to never write a secret into agent memory.
 | `MEM_RETROUVER_POIDS_SENS` | weight of meaning in `mem recall` fusion (0.5) |
 | `MEM_UTILISATEUR` | name shown for your messages (otherwise `~/.config/mem/utilisateur`, or "user") |
 
+### Synonyms, dates and conventions
+
 Project-specific synonyms: one group per line, words separated by commas.
 ```
 reviewer, review, code-review
@@ -330,11 +336,18 @@ searched by meaning nor reranked: dates matter more than closeness of meaning th
 Recognised conventions: the YAML front matter of Claude Code notes (`name`, `description`,
 `metadata.type`), dates at the start of an entry (`- 08/11 …`, `## 2026-11-08`), and handover notes
 ("POINT DE REPRISE") treated as a log: their old passages rank below rules, unless the question asks
-for the "latest" (« dernier ») state.
+for the "latest" (« dernier ») state. A note at the root of the memory folder without `type:` is
+treated as an index and left out of default searches; `mem status` lists it.
 
-On some systems (Ubuntu 24.04 for instance), unprivileged user namespaces are blocked: `unshare -rn`
-fails, and the installer then writes the unit without it. The reranker makes no network calls anyway;
-`unshare` is only a second barrier.
+## Repository contents
+
+- `mem`: the script, the only file you need;
+- `reclasseur/`: the reranking service (Node.js) and its installer;
+- `systemd/`: the reranker's user unit;
+- `integration/`: what you need to plug `mem` into Claude Code (CLAUDE.md and settings.json excerpts,
+  hooks, the pre-/clear procedure, a slimmer startup);
+- `exemples/`: a small sample memory and a question set in `mem bench` format;
+- `docs/`: the context diagrams.
 
 ## Licences
 
