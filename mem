@@ -30,7 +30,8 @@ worktrees). Aucun repli : hors projet, donner --dossier ou MEM_DIR.
 Base : $MEM_DB, sinon ~/.local/share/mem/<nom du dossier>.db (0600).
 Reclassement : les 10 premiers passages sont renotés par un petit modèle local
 (sans réseau : ~3-4 s par le service mem-reclasseur, llama-server ; sans lui, pas de reclassement,
-sauf ancienne méthode reclasser.mjs dans ~/.local/share/mem/reclasseur, ~9 s ; au lieu de 0,3 s) ; --vite ou MEM_RECLASSER=0 s'en passent (aussi pour mem bench).
+sauf ancienne méthode reclasser.mjs dans ~/.local/share/mem/reclasseur, ~9 s ; au lieu de 0,3 s) ;
+--vite ou MEM_RECLASSER=0 s'en passent (aussi pour mem bench).
 S'il échoue, mem le dit sur la sortie d'erreur et rend son classement par mots et sens.
 """
 
@@ -482,11 +483,20 @@ def raison_sens() -> str:
               "Ollama answers: the computation was probably interrupted")
 
 
+_AVIS_NUMPY = []  # l'avis « numpy absent » n'est donné qu'une fois par commande
+
+
 def vecteurs(textes: list[str], delai: float = SENS_DELAI) -> list | None:
-    """Vecteurs normalisés (float32) ; None si Ollama ne répond pas."""
+    """Vecteurs normalisés (float32) ; None si Ollama ne répond pas ou si numpy manque (avec un avis)."""
     try:
         import numpy as np
-
+    except ImportError:  # par exemple python3 -I, qui cache les modules installés par pip --user
+        if not _AVIS_NUMPY:
+            _AVIS_NUMPY.append(1)
+            print(tr("mem : numpy absent, recherche par le sens coupée (pip install numpy)",
+                     "mem: numpy missing, search by meaning is off (pip install numpy)"), file=sys.stderr)
+        return None
+    try:
         # keep_alive -1 : bge-m3 reste chargé (sinon Ollama le décharge après 5 min et la recherche suivante
         # perd 3 à 4 s). MEM_SENS_GARDER=0 revient au délai d'Ollama.
         corps = {"model": SENS_MODELE, "input": textes}
@@ -499,7 +509,7 @@ def vecteurs(textes: list[str], delai: float = SENS_DELAI) -> list | None:
         with direct.open(req, timeout=delai) as r:
             m = np.asarray(json.load(r)["embeddings"], dtype=np.float32)
         return list(m / np.maximum(np.linalg.norm(m, axis=1, keepdims=True), 1e-9))
-    except Exception:  # réseau, modèle absent, numpy absent : on reste sur les mots
+    except Exception:  # réseau, modèle absent : on reste sur les mots
         return None
 
 
@@ -1892,6 +1902,19 @@ def selftest() -> int:
                 mauvais.write_text(contenu, encoding="utf-8")
                 with contextlib.redirect_stderr(io.StringIO()):
                     cas(nom, point(racine, str(mauvais), fichier_verrou=Path(tmp) / "v") == 2 and (racine / POINT_NOTE).read_text() == note_p)
+            # numpy absent (python3 -I, par exemple) : pas de vecteurs, et un avis, une seule fois.
+            err, garde, _AVIS_NUMPY[:] = io.StringIO(), sys.modules.get("numpy"), []
+            sys.modules["numpy"] = None  # import numpy lève ImportError
+            try:
+                with contextlib.redirect_stderr(err):
+                    sans_numpy = (vecteurs(["a"]), vecteurs(["b"]))
+            finally:
+                if garde is None:
+                    del sys.modules["numpy"]
+                else:
+                    sys.modules["numpy"] = garde
+            cas(tr("sens : numpy absent, pas de vecteurs et un seul avis", "meaning: numpy missing, no vectors and one notice"),
+                sans_numpy == (None, None) and len(err.getvalue().splitlines()) == 1 and "numpy" in err.getvalue())
             # Reclassement : un faux reclasseur (note = numéro du passage) et un reclasseur absent.
             lignes = [(f"n{i}.md", 1, "", "project", f"t{i}", "texte", 0.0) for i in range(K_RECLASSE + 2)]
             SOCKET_RECLASSEUR = Path(tmp) / "pas-de-serveur.sock"  # jamais le vrai service pendant le selftest
