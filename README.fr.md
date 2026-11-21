@@ -73,10 +73,10 @@ Le contexte, c'est tout ce que le modèle relit avant de répondre, à chaque to
 3. **la conversation** : vos messages, les réponses, les fichiers lus, les sorties de commandes. Elle
    grossit à chaque tour, et c'est elle qui finit par peser le plus.
 
-Le cache des prompts rend cette relecture moins chère, pas gratuite : un tour coûte d'autant plus que
-le contexte est gros.
+Grâce au cache des prompts, cette relecture coûte moins cher, mais elle se paie quand même, et
+d'autant plus que le contexte est gros.
 
-Sur notre projet (plusieurs agents, des semaines de travail), trois choses avaient grossi :
+Chez nous, après des semaines de travail à plusieurs agents, trois choses avaient pris trop de place :
 
 - **CLAUDE.md** : 23 Ko de règles, relus à chaque démarrage et après chaque compact ;
 - **MEMORY.md** : 111 lignes, 24 Ko, chargées de même dans chaque session ;
@@ -219,8 +219,8 @@ durables, sauf si la question demande le « dernier » état. Plusieurs agents s
 ou `MEM_POINT_NOTE` et `MEM_POINT_ARCHIVE` dans l'environnement de chaque agent (le hook lit aussi
 `MEM_POINT_NOTE`).
 
-Pour aller plus loin (non fourni) : un hook `Stop` peut surveiller la taille du contexte et demander
-`/avant-clear` à l'agent au-delà d'un seuil, avant qu'une session devienne chère.
+Nous ne le fournissons pas, mais un hook `Stop` peut aussi surveiller la taille du contexte. Passé un
+seuil, il demande à l'agent de lancer `/avant-clear`, avant que la session ne coûte trop cher.
 
 ## Ce que ça coûte, ce que ça rapporte
 

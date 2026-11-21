@@ -70,9 +70,10 @@ The context is everything the model rereads before answering, on every turn:
 3. **the conversation**: your messages, the answers, the files read, the command outputs. It grows on
    every turn, and ends up weighing the most.
 
-Prompt caching makes this rereading cheaper, not free: the bigger the context, the more a turn costs.
+Prompt caching lowers the price of this rereading, but you still pay for it, and more so as the
+context grows.
 
-On our project (several agents, weeks of work), three things had grown:
+In our project, after weeks of work with several agents, three things had grown too big:
 
 - **CLAUDE.md**: 23 KB of rules, reread at every start and after every compaction;
 - **MEMORY.md**: 111 lines, 24 KB, loaded into every session as well;
@@ -210,8 +211,8 @@ question asks for the "latest" state. Several agents on one project:
 or `MEM_POINT_NOTE` and `MEM_POINT_ARCHIVE` in each agent's environment (the hook reads
 `MEM_POINT_NOTE` too).
 
-Going further (not included): a `Stop` hook can watch the context size and ask the agent to run
-`/avant-clear` past a threshold, before a session gets expensive.
+We don't ship it, but a `Stop` hook can also watch the context size. Past a threshold, it asks the
+agent to run `/avant-clear`, before the session gets too expensive.
 
 ## Cost and benefit
 
