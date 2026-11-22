@@ -70,6 +70,7 @@ mem perimes                                  # renvois morts : chemin, fichier, 
 mem bench questions.tsv                      # top 1, top 3, MRR sur vos propres questions
 mem retrouver "pourquoi l'ancien relais ?"   # échanges passés (transcriptions de Claude Code), voir plus bas
 mem retrouver --voir 1a2b3c4d:120            # ce message et ses voisins
+mem code "où est géré l'envoi programmé"     # dans le code du dépôt courant, voir plus bas
 mem point point.md                           # point de reprise neuf avant /clear ou /compact
 mem selftest
 ```
@@ -310,6 +311,44 @@ Deux fichiers facultatifs : `~/.config/mem/utilisateur` (le nom affiché pour vo
 `~/.config/mem/canaux` (préfixes de canal, un par ligne : « [Salon — Alice · 101500] texte » est
 alors rangé sous « alice (Salon) »).
 
+## Chercher dans le code : `mem code`
+
+```
+mem code "où vérifie-t-on que le certificat HTTPS va expirer"   # dans le dépôt git courant
+mem code --vite "verrou de la boîte"                           # sans reclasseur
+mem code --depot ~/projets/app --dans app/services "envoi programmé"
+mem code --indexer                                              # tout indexer d'un coup
+```
+
+La même recherche que pour les notes (mots, sens, reclasseur), sur le code d'un dépôt. Un agent
+qui cherche « où est le code qui fait X » sans en connaître les noms enchaîne d'habitude des `grep` au jugé ;
+`mem code` lui donne les fichiers et les lignes à lire.
+
+Ce qui est lu : les fichiers suivis par git (`.py`, `.yaml`, `.yml`, `.sh`, `.js`, `.ts`, `.toml`) ;
+hors dépôt git, l'arborescence sans dossiers cachés ni dépendances (`node_modules`, `venv`…). Jamais
+de lien symbolique ni de fichier de plus de 500 Ko. Le Python est découpé par fonction, classe et
+méthode (décorateurs compris), le reste par blocs ; les petits morceaux voisins sont regroupés
+jusqu'à 1 500 caractères environ. Le filtre de secrets des notes s'applique ligne par ligne.
+L'index est à part (`~/.local/share/mem/<dépôt>.code.db`, 0600) et se met à jour à la recherche
+suivante quand un fichier change. La première fois, le sens est long : environ 6 minutes pour 200
+fichiers.
+
+Mesuré sur une application de 200 fichiers (Python et YAML), deux jeux de 40 questions « où
+est le code qui… », formulées sans les noms du code ; rang du premier bon fichier (MRR) :
+
+| | jeu 1 | jeu 2 |
+|---|---|---|
+| `grep` mécanique des mots de la question | 0,34 | 0,26 |
+| memtomem 0.7.12 (hybride, bge-m3) | 0,75 | 0,78 |
+| memtomem + le reclasseur de mem | 0,91 | 0,93 |
+| `mem code --vite` | 0,87 | 0,78 |
+| `mem code` | 0,94 | 0,90 |
+
+Temps d'une recherche : 0,3 s avec `--vite`, environ 6 s avec le reclasseur (20 passages renotés au
+lieu de 10). Le jeu 2 a été écrit à part, à partir des docstrings d'autres fichiers que le jeu 1 ;
+mais le regroupement des petits morceaux a été choisi après l'avoir passé (il faisait 0,85 sans) :
+aucun des deux jeux n'est plus tout à fait neutre. Ces chiffres viennent d'un seul dépôt.
+
 ## Secrets
 
 Une ligne qui ressemble à un secret (clé privée, jeton connu, `password: …`, URL à identifiants,
@@ -339,6 +378,9 @@ est requis » et reste visible. Le plus sûr reste de ne jamais écrire de secre
 | `MEM_RETROUVER_SOURCE` | dossier des transcriptions (sinon `~/.claude/projects`) |
 | `MEM_RETROUVER_POIDS_SENS` | poids du sens dans la fusion de `mem retrouver` (0.5) |
 | `MEM_UTILISATEUR` | nom affiché pour vos messages (sinon `~/.config/mem/utilisateur`, ou « user ») |
+| `MEM_CODE_DB` | base de `mem code` (sinon `~/.local/share/mem/<dépôt>.code.db`) |
+| `MEM_CODE_EXT` | extensions lues par `mem code`, séparées par des virgules (`.py,.yaml,.yml,.sh,.js,.ts,.toml`) |
+| `MEM_CODE_REGROUPE` | taille visée des passages regroupés de `mem code`, en caractères (1500 ; 0 : jamais regroupés) |
 
 ### Synonymes, dates et conventions
 

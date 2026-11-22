@@ -39,6 +39,7 @@ S'il échoue, mem le dit sur la sortie d'erreur et rend son classement par mots 
 from __future__ import annotations
 
 import argparse
+import ast
 import collections
 import datetime as dt
 import fcntl
@@ -211,6 +212,7 @@ AGE_JOURNAL, FACTEUR_JOURNAL = 14, 0.6  # passage d'une note à POINT DE REPRISE
 # (banc privé de 200 questions : MRR 0,64 → 0,73 ; banc de 50 : 0,71 → 0,76 ; mesures du 22/11/2026, llama-server).
 RECLASSEUR = Path(os.environ.get("MEM_RECLASSEUR", Path.home() / ".local" / "share" / "mem" / "reclasseur"))
 K_RECLASSE, DELAI_RECLASSE = 10, 60  # passages renotés ; secondes
+LONGUEUR_RECLASSE = 1500  # caractères de chaque passage montrés au reclasseur
 # Serveur qui garde le modèle chargé (llama-server --rerank, ou l'ancien serveur.mjs) : essayé d'abord ;
 # absent, mem lance reclasser.mjs.
 # Jamais de repli dans /tmp : un autre utilisateur pourrait y préparer le chemin. Sans XDG_RUNTIME_DIR ni
@@ -554,12 +556,146 @@ def calculer_sens(con: sqlite3.Connection, base: Path) -> None:
 
 
 def notes(racine: Path):
+    if MODE_CODE:
+        return fichiers_code(racine)
     return sorted(p for p in racine.rglob("*.md") if p.is_file() and not any(part.startswith(".") for part in p.relative_to(racine).parts))
+
+
+# mem code : chercher dans le code d'un dépôt, avec les mêmes index, fusion et reclasseur que pour les notes.
+MODE_CODE = False  # vrai pour « mem code » : fichiers de code au lieu des notes .md
+EXT_CODE = {".py", ".yaml", ".yml", ".sh", ".js", ".ts", ".toml"}  # $MEM_CODE_EXT (« .py,.sh ») les remplace
+CODE_TAILLE_FICHIER = 500_000  # octets : au-delà (données, fichier minifié), le fichier n'est pas indexé
+CODE_LIGNES = 60  # une fonction plus longue est recoupée en morceaux de CODE_LIGNES lignes
+# Banc de code (40 questions sur une application FastAPI, 22/11/2026) : renoter 20 passages coupés à 600 caractères
+# fait aussi bien que 20 passages entiers (MRR 0,91) en deux fois moins de temps (~7 s).
+K_RECLASSE_CODE, LONGUEUR_RECLASSE_CODE = 20, 600
+CODE_REGROUPE = int(os.environ.get("MEM_CODE_REGROUPE", "1500"))  # caractères : taille visée des passages regroupés
+IGNORES_CODE = {"node_modules", "__pycache__", "venv", ".venv", "dist", "build"}
+
+
+def depot_courant() -> Path | None:
+    try:
+        r = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=30, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return Path(r.stdout.strip()) if r.stdout.strip() else None
+
+
+def fichiers_code(racine: Path) -> list[Path]:
+    """Les fichiers suivis par git (jamais .env, données ni journaux non suivis) ; hors dépôt git, l'arborescence
+    sans dossiers cachés ni dépendances. Ni lien symbolique (il pourrait sortir du dépôt) ni très gros fichier."""
+    exts = {e.strip().lower() for e in os.environ.get("MEM_CODE_EXT", "").split(",") if e.strip()} or EXT_CODE
+    try:
+        sortie = subprocess.run(["git", "-C", str(racine), "ls-files", "-z"], capture_output=True, timeout=60,
+                                check=True).stdout
+        chemins = [racine / n for n in sortie.decode("utf-8", "replace").split("\0") if n]
+    except (OSError, subprocess.SubprocessError):
+        chemins = [p for p in racine.rglob("*") if not any(x.startswith(".") or x in IGNORES_CODE
+                                                           for x in p.relative_to(racine).parts)]
+    return sorted(p for p in chemins if p.suffix.lower() in exts and not p.is_symlink() and p.is_file()
+                  and p.stat().st_size <= CODE_TAILLE_FICHIER)
+
+
+def morceaux_python(texte: str, nb: int) -> list[tuple[int, int, str]]:
+    """(début, fin, nom) : chaque fonction, classe et méthode, décorateurs compris ; le code entre elles (imports,
+    constantes, en-tête de classe) forme ses propres morceaux. Lève SyntaxError si le fichier ne se lit pas."""
+    morceaux = []
+
+    def debut(nd):
+        return min([nd.lineno] + [d.lineno for d in getattr(nd, "decorator_list", [])])
+
+    def visiter(corps, prefixe: str, de: int, a: int):
+        curseur = de
+        for nd in corps:
+            if not isinstance(nd, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            d, f = debut(nd), nd.end_lineno
+            if d > curseur:
+                morceaux.append((curseur, d - 1, prefixe.rstrip(".") or "(module)"))
+            nom = prefixe + nd.name
+            if isinstance(nd, ast.ClassDef) and any(isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                                                    for m in nd.body):
+                visiter(nd.body, nom + ".", d, f)  # l'en-tête de la classe devient le morceau qui précède ses méthodes
+            else:
+                morceaux.append((d, f, nom))
+            curseur = f + 1
+        if curseur <= a:
+            morceaux.append((curseur, a, prefixe.rstrip(".") or "(module)"))
+
+    visiter(ast.parse(texte).body, "", 1, nb)
+    return morceaux
+
+
+def morceaux_blocs(lignes: list[str], yaml: bool) -> list[tuple[int, int, str]]:
+    """YAML : un morceau par clé de premier niveau (regroupées jusqu'à 15 lignes) ; autres : coupé aux lignes vides."""
+    def frontiere(l: str) -> bool:
+        return bool(l) and not l[0].isspace() and l[0] not in "#-" if yaml else not l.strip()
+
+    morceaux, debut = [], 1
+    for n in range(2, len(lignes) + 1):
+        if (frontiere(lignes[n - 1]) and n - debut >= 15) or n - debut >= CODE_LIGNES:
+            morceaux.append((debut, n - 1, ""))
+            debut = n
+    if lignes:
+        morceaux.append((debut, len(lignes), ""))
+    return morceaux
+
+
+def decouper_code(chemin: Path, racine: Path):
+    """Passages d'un fichier de code : même filtre des secrets que les notes, ligne par ligne, puis découpe."""
+    rel = str(chemin.relative_to(racine))
+    brut = chemin.read_text(encoding="utf-8", errors="replace")
+    lignes, propres, refus, dans_bloc = brut.splitlines(), [], [], False
+    for n, l in enumerate(lignes, start=1):
+        if DEBUT_BLOC.search(l):
+            dans_bloc = True
+        if dans_bloc:
+            refus.append((rel, n, "bloc de clé"))
+            if FIN_BLOC.search(l):
+                dans_bloc = False
+            propres.append("")  # la ligne disparaît, les numéros restent justes
+            continue
+        texte, motif = masquer(l)
+        if motif:
+            refus.append((rel, n, motif + (MASQUEE if texte is not None else "")))
+            l = texte if texte is not None else ""
+        propres.append(l)
+    morceaux = None
+    if chemin.suffix.lower() == ".py":
+        try:
+            morceaux = morceaux_python(brut, len(lignes))
+        except (SyntaxError, ValueError, RecursionError):
+            pass  # fichier Python illisible : découpé comme un texte
+    if morceaux is None:
+        morceaux = morceaux_blocs(propres, chemin.suffix.lower() in (".yaml", ".yml"))
+    passages = []
+    for d, f, nom in morceaux:
+        for d2 in range(d, f + 1, CODE_LIGNES):
+            bloc = propres[d2 - 1:min(f, d2 + CODE_LIGNES - 1)]
+            texte = "\n".join(bloc).strip("\n")
+            if not texte.strip():
+                continue
+            if not nom:  # YAML ou texte : la première ligne non vide sert de nom
+                nom_bloc = next((x.strip() for x in bloc if x.strip()), "")[:60]
+            else:
+                nom_bloc = nom
+            d_reel = d2 + next(i for i, x in enumerate(bloc) if x.strip())
+            passages.append((rel, d_reel, "", "code", "", nom_bloc, texte))
+    regroupes = []  # les petits morceaux voisins vont ensemble : seuls, ils brouillent le classement par le sens
+    for p in passages:
+        if regroupes and len(regroupes[-1][6]) + len(p[6]) <= CODE_REGROUPE:
+            r = regroupes[-1]
+            noms = r[5] if p[5] in r[5].split(", ") else f"{r[5]}, {p[5]}"
+            regroupes[-1] = (*r[:5], noms, f"{r[6]}\n\n{p[6]}")
+        else:
+            regroupes.append(p)
+    return [(*r[:5], f"{rel} :: {r[5][:120]}", r[6]) for r in regroupes], refus
 
 
 def empreinte(racine: Path) -> str:
     h = hashlib.sha256(Path(__file__).read_bytes())  # une nouvelle version de mem refait aussi l'index
     h.update(b"sens" if sens_actif() else b"mots")  # index fait avec MEM_SENS=0 : refait quand le sens revient
+    h.update(b"code" if MODE_CODE else b"notes")
     for p in notes(racine):
         st = p.stat()
         h.update(f"{p.relative_to(racine)}\0{st.st_mtime_ns}\0{st.st_size}\n".encode())
@@ -607,7 +743,7 @@ def indexer(racine: Path, base: Path, si_perime: bool = False) -> tuple[int, int
             total = 0
             emp = empreinte(racine)
             for chemin in notes(racine):
-                passages, refus = decouper(chemin, racine)
+                passages, refus = (decouper_code if MODE_CODE else decouper)(chemin, racine)
                 con.executemany(
                     "INSERT INTO passages(fichier, ligne, date, type, auteur, titre, texte) VALUES (?,?,?,?,?,?,?)",
                     passages,
@@ -704,7 +840,7 @@ def chercher(racine: Path, base: Path, mots: str, n=5, type_=None, depuis=None, 
     if dans and dans.startswith("archive"):
         archives = True
     termes = termes_de(mots)
-    recent = any(t in RECENT for t in re.findall(r"\w+", mots.lower()))
+    recent = not MODE_CODE and any(t in RECENT for t in re.findall(r"\w+", mots.lower()))
     con = sqlite3.connect(f"file:{base}?mode=ro", uri=True)
     aujourd_hui = dt.date.today()
 
@@ -891,7 +1027,7 @@ def reclasser(question: str, resultats: list) -> list:
     if len(tete) < 2:
         return resultats
     script, node = RECLASSEUR / "reclasser.mjs", node_pour_reclasser()
-    docs = [f"{r[0]} — {r[4]}\n{r[5]}"[:1500] for r in tete]
+    docs = [(f"{r[4]}\n{r[5]}" if MODE_CODE else f"{r[0]} — {r[4]}\n{r[5]}")[:LONGUEUR_RECLASSE] for r in tete]
     try:
         notes = noter_par_serveur(question, docs)
         if notes is None:
@@ -1558,6 +1694,7 @@ def bench(racine: Path, base: Path, fichier: Path, n: int = 10) -> int:
     for l in texte.splitlines():
         if l.strip() and not l.startswith("#"):
             q, _, attendues = l.partition("\t")
+            attendues = attendues.split("\t")[0]  # une 3e colonne (type de question…) est permise
             questions.append((q.strip(), {a.strip() for a in attendues.split(",") if a.strip()}))
     if not questions:
         raise SystemExit(tr(f"mem : aucune question dans {fichier}", f"mem: no questions in {fichier}"))
@@ -1566,7 +1703,9 @@ def bench(racine: Path, base: Path, fichier: Path, n: int = 10) -> int:
         print(tr(f"note attendue introuvable : {a}", f"expected note not found: {a}"))
     rangs = []
     for q, attendues in questions:
-        fichiers = [r[0] for r in chercher(racine, base, q, n)]
+        fichiers = [r[0] for r in chercher(racine, base, q, n * PAR_FICHIER if MODE_CODE else n)]
+        if MODE_CODE:  # le code se juge au fichier : chaque fichier compte une fois
+            fichiers = list(dict.fromkeys(fichiers))[:n]
         rang = next((i for i, f in enumerate(fichiers, start=1) if f in attendues), None)
         rangs.append(rang)
         tete = fichiers[0] if fichiers else tr("rien", "nothing")
@@ -1583,6 +1722,7 @@ def bench(racine: Path, base: Path, fichier: Path, n: int = 10) -> int:
 def selftest() -> int:
     """Lignes pièges du filtre de secrets, de l'index et des commandes, dans une mémoire jetable (sans Ollama).
     Aucune valeur n'est affichée : seulement « ok » ou « ÉCHEC » et le nom du cas."""
+    global MODE_CODE, K_RECLASSE, LONGUEUR_RECLASSE, CODE_REGROUPE
     FAUX = "Zq8xPw3LmN" + "7vRt2YkB9c"  # valeur piège coupée : aucun scanner de secrets ne la prend pour vraie
     import tempfile
 
@@ -2025,6 +2165,46 @@ def selftest() -> int:
             CONV_BASE, CONV_SOURCE = ancienne_base, ancienne_source
             for cle, val in anciens.items():
                 os.environ.pop(cle, None) if val is None else os.environ.update({cle: val})
+
+    # mem code : découpe par fonction et classe, secrets masqués, dossiers cachés exclus hors git, recherche par mots.
+    anciens_code = (MODE_CODE, K_RECLASSE, LONGUEUR_RECLASSE, CODE_REGROUPE)
+    anciens_env = {k: os.environ.get(k) for k in ("MEM_SENS", "MEM_CODE_DB", "GIT_CEILING_DIRECTORIES")}
+    with tempfile.TemporaryDirectory(prefix="mem-test-code-") as tmp:
+        try:
+            depot = Path(tmp) / "depot"
+            (depot / "paquet").mkdir(parents=True)
+            (depot / ".cache").mkdir()
+            (depot / "node_modules").mkdir()
+            (depot / "paquet" / "outil.py").write_text(
+                '"""Module d\'essai."""\nimport os\n\n\n@deco\ndef zorglub():\n    return 1\n\n\nclass Coffre:\n'
+                f'    password = "{FAUX}"\n\n    def ouvrir(self):\n        pass\n', encoding="utf-8")
+            (depot / ".cache" / "cache.py").write_text("zorglub = 1\n", encoding="utf-8")
+            (depot / "node_modules" / "dep.js").write_text("zorglub();\n", encoding="utf-8")
+            os.environ.update(GIT_CEILING_DIRECTORIES=tmp, MEM_SENS="0", MEM_CODE_DB=str(Path(tmp) / "code.db"))
+            cas(tr("code : hors git, dossiers cachés et dépendances exclus", "code: outside git, hidden folders and dependencies skipped"),
+                fichiers_code(depot) == [depot / "paquet" / "outil.py"])
+            CODE_REGROUPE = 0
+            seuls, refus = decouper_code(depot / "paquet" / "outil.py", depot)
+            cas(tr("code : un passage par fonction, classe et méthode, décorateur compris",
+                   "code: one passage per function, class and method, decorator included"),
+                [(r[1], r[5].split(" :: ")[1]) for r in seuls]
+                == [(1, "(module)"), (5, "zorglub"), (10, "Coffre"), (13, "Coffre.ouvrir")])
+            cas(tr("code : secret masqué dans le passage", "code: secret masked in the passage"),
+                bool(refus) and not any(FAUX in r[6] for r in seuls))
+            CODE_REGROUPE = 1500
+            ensemble, _ = decouper_code(depot / "paquet" / "outil.py", depot)
+            cas(tr("code : petits morceaux voisins regroupés", "code: small neighbouring pieces grouped"),
+                len(ensemble) == 1 and ensemble[0][5].endswith(":: (module), zorglub, Coffre, Coffre.ouvrir")
+                and "def ouvrir" in ensemble[0][6])
+            with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
+                rc1 = main(["code", "--depot", str(depot), "--indexer"])
+                rc2 = main(["code", "--depot", str(depot), "--vite", "zorglub"])
+            cas(tr("code : index et recherche par mots", "code: index and word search"),
+                rc1 == 0 and rc2 == 0 and "paquet/outil.py:1" in out.getvalue() and ".cache" not in out.getvalue())
+        finally:
+            MODE_CODE, K_RECLASSE, LONGUEUR_RECLASSE, CODE_REGROUPE = anciens_code
+            for cle, val in anciens_env.items():
+                os.environ.pop(cle, None) if val is None else os.environ.update({cle: val})
     print("\n" + (tr("aucun échec", "no failures") if not echecs
                   else tr(f"{len(echecs)} échec(s)", f"{len(echecs)} failure(s)")))
     return 1 if echecs else 0
@@ -2446,6 +2626,40 @@ def conv_etat(base: Path, source: Path) -> int:
     return 0
 
 
+def code(args) -> int:
+    """mem code : chercher dans le code du dépôt courant (ou --depot), index à part (~/.local/share/mem/<dépôt>.code.db)."""
+    global MODE_CODE, K_RECLASSE, LONGUEUR_RECLASSE
+    depot = args.depot.expanduser() if args.depot else depot_courant()
+    if depot is None or not depot.is_dir():
+        print(tr("mem code : pas de dépôt git ici ; donner --depot DOSSIER", "mem code: no git repository here; pass --repo DIR"),
+              file=sys.stderr)
+        return 2
+    depot = depot.resolve()
+    MODE_CODE, K_RECLASSE, LONGUEUR_RECLASSE = True, K_RECLASSE_CODE, LONGUEUR_RECLASSE_CODE
+    base = Path(os.environ["MEM_CODE_DB"]).expanduser() if os.environ.get("MEM_CODE_DB") else _donnees(depot, ".code.db")
+    if args.indexer:
+        total, refus = indexer(depot, base)
+        print(tr(f"{total} passages de code indexés, {refus} lignes masquées ou retirées",
+                 f"{total} code passages indexed, {refus} lines masked or withheld"))
+        return 0
+    if args.bench:
+        return bench(depot, base, args.bench)
+    if not args.mots:
+        print(tr("mem code : que chercher ?", "mem code: what should I search for?"), file=sys.stderr)
+        return 2
+    dans = None
+    if args.dans is not None:
+        dans = normaliser_dans(depot, args.dans)
+        if dans is None:
+            print(tr(f"mem code : « {args.dans} » n'existe pas dans {depot}", f"mem code: \"{args.dans}\" does not exist in {depot}"),
+                  file=sys.stderr)
+            return 2
+    print(tr(f"(code : {depot}" + (f", dans {dans}" if dans else "") + ")",
+             f"(code: {depot}" + (f", in {dans}" if dans else "") + ")"), file=sys.stderr)
+    afficher(chercher(depot, base, " ".join(args.mots), args.n, reclasse=not args.vite, dans=dans))
+    return 0
+
+
 def retrouver(args) -> int:
     base, source = CONV_BASE, CONV_SOURCE
     if args.etat:
@@ -2603,8 +2817,27 @@ def main(argv=None) -> int:
                    help=argparse.SUPPRESS)
     r.add_argument(*deux_noms("--etat", "--status"), dest="etat", action="store_true",
                    help=tr("base, passages, lignes retirées", "database, passages, withheld lines"))
+    co = sub.add_parser("code", help=tr("chercher dans le code du dépôt git courant (fonctions, classes, YAML)",
+                                        "search the code of the current git repository (functions, classes, YAML)"))
+    co.add_argument("mots", nargs="*", metavar=tr("mots", "words"))
+    co.add_argument("--n", type=int, default=5, help=tr("nombre de résultats", "number of results"))
+    co.add_argument(*deux_noms("--depot", "--repo"), dest="depot", metavar=tr("DEPOT", "REPO"), type=Path,
+                    help=tr("dépôt où chercher (sinon celui du dossier courant)", "repository to search (default: the current one)"))
+    co.add_argument(*deux_noms("--dans", "--in"), dest="dans", metavar=tr("DANS", "PATH"),
+                    help=tr("seulement ce sous-dossier (app/) ou ce fichier", "only this subfolder (app/) or this file"))
+    co.add_argument(*deux_noms("--vite", "--fast"), dest="vite", action="store_true",
+                    help=tr("sans reclassement par le modèle local (~1 s au lieu de ~7 s)",
+                            "no reranking by the local model (~1 s instead of ~7 s)"))
+    co.add_argument(*deux_noms("--indexer", "--index"), dest="indexer", action="store_true",
+                    help=tr("refaire l'index du code (la 1re fois, le sens peut prendre plusieurs minutes)",
+                            "rebuild the code index (the first time, embeddings can take several minutes)"))
+    co.add_argument("--bench", type=Path, metavar=tr("QUESTIONS", "QUESTIONS"),
+                    help=tr("top 1, top 3, MRR : une ligne « question<TAB>fichier,fichier »",
+                            "top 1, top 3, MRR: one line \"question<TAB>file,file\""))
     args = ap.parse_args(argv)
     args.cmd = COMMANDES_EN.get(args.cmd, args.cmd)  # « mem search » = « mem chercher »
+    if args.cmd == "code":
+        return code(args)
     if args.cmd == "retrouver":
         return retrouver(args)
 

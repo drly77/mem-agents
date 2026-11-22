@@ -66,6 +66,7 @@ mem stale                                    # dead references: path, file, comm
 mem bench questions.tsv                      # top 1, top 3, MRR on your own questions
 mem recall "why did we drop the old relay?"  # past conversations (Claude Code transcripts), see below
 mem recall --show 1a2b3c4d:120               # that message and its neighbors
+mem code "where is scheduled sending handled"  # in the current repository's code, see below
 mem handover point.md                        # new handover note before /clear or /compact
 mem selftest
 ```
@@ -301,6 +302,43 @@ Two optional files: `~/.config/mem/utilisateur` (the name shown for your message
 `~/.config/mem/canaux` (channel prefixes, one per line: "[Lounge — Alice · 101500] text" is then
 filed under "alice (Lounge)").
 
+## Searching code: `mem code`
+
+```
+mem code "where do we check that the HTTPS certificate is about to expire"   # in the current git repository
+mem code --fast "mailbox lock"                                               # without the reranker
+mem code --repo ~/projects/app --in app/services "scheduled sending"
+mem code --index                                                             # index everything at once
+```
+
+The same search as for notes (words, meaning, reranker), over a repository's code. An agent looking
+for "where is the code that does X" without knowing its names usually fires off `grep`s by guesswork;
+`mem code` gives it the files and lines to read.
+
+What is read: files tracked by git (`.py`, `.yaml`, `.yml`, `.sh`, `.js`, `.ts`, `.toml`); outside
+a git repository, the tree without hidden folders or dependencies (`node_modules`, `venv`…). Never a
+symbolic link or a file over 500 KB. Python is cut by function, class and method (decorators
+included), the rest by blocks; small neighboring pieces are grouped up to about 1,500 characters.
+The notes' secret filter applies line by line. The index is separate
+(`~/.local/share/mem/<repo>.code.db`, 0600) and is refreshed on the next search when a file
+changes. The first time, meaning takes a while: about 6 minutes for 200 files.
+
+Measured on a 200-file application (Python and YAML), two sets of 40 "where is the code that…"
+questions, worded without the code's names; rank of the first right file (MRR):
+
+| | set 1 | set 2 |
+|---|---|---|
+| mechanical `grep` of the question's words | 0.34 | 0.26 |
+| memtomem 0.7.12 (hybrid, bge-m3) | 0.75 | 0.78 |
+| memtomem + mem's reranker | 0.91 | 0.93 |
+| `mem code --fast` | 0.87 | 0.78 |
+| `mem code` | 0.94 | 0.90 |
+
+Time per search: 0.3 s with `--fast`, about 6 s with the reranker (20 passages rescored instead of
+10). Set 2 was written separately, from the docstrings of files other than set 1's; but grouping
+small pieces was chosen after running it (it scored 0.85 without): neither set is fully neutral
+any more. These figures come from a single repository. The questions are in French.
+
 ## Secrets
 
 A line that looks like a secret (private key, known token format, `password: …`, URL with credentials,
@@ -330,6 +368,9 @@ visible. The safest thing is still to never write a secret into agent memory.
 | `MEM_RETROUVER_SOURCE` | transcripts folder (otherwise `~/.claude/projects`) |
 | `MEM_RETROUVER_POIDS_SENS` | weight of meaning in `mem recall` fusion (0.5) |
 | `MEM_UTILISATEUR` | name shown for your messages (otherwise `~/.config/mem/utilisateur`, or "user") |
+| `MEM_CODE_DB` | `mem code` database (otherwise `~/.local/share/mem/<repo>.code.db`) |
+| `MEM_CODE_EXT` | extensions read by `mem code`, comma-separated (`.py,.yaml,.yml,.sh,.js,.ts,.toml`) |
+| `MEM_CODE_REGROUPE` | target size of `mem code`'s grouped passages, in characters (1500; 0: never grouped) |
 
 ### Synonyms, dates and conventions
 
