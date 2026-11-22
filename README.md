@@ -328,8 +328,16 @@ search when a file changes. The first time, meaning takes a while: about 6 minut
 git worktree has its own word index but reuses the main repository's vectors: it is ready in a few
 seconds.
 
-Measured on a 200-file application (Python and YAML), two sets of 40 "where is the code that…"
-questions, worded without the code's names; rank of the first right file (MRR):
+Measured on a 200-file application (Python and YAML), with two sets of 40 "where is the code
+that…" questions, worded without the code's names:
+
+- **set 1**: written by the agent that built `mem code`, while reading the code; it was used to tune
+  the reranker (20 passages of 600 characters);
+- **set 2**: written afterwards by another agent, on other files, from their docstrings, without
+  seeing the results. More rewordings: it is harder (`grep` drops to 0.26).
+
+Figure shown: MRR, the mean of 1/rank of the first right file (1 = always first; one question out
+of 40 weighs about 0.02).
 
 | | set 1 | set 2 |
 |---|---|---|
@@ -339,10 +347,14 @@ questions, worded without the code's names; rank of the first right file (MRR):
 | `mem code --fast` | 0.87 | 0.78 |
 | `mem code` | 0.94 | 0.90 |
 
+On set 2, `mem code` misses 3 questions that memtomem partly recovers: rewordings sharing no word
+with the code ("a padlock on the disk" for a file lock). The right file then does not make it into
+the 20 candidates mem hands to the reranker, which therefore cannot lift it. On set 1 it is the other
+way round; on average the two are even.
+
 Time per search: 0.3 s with `--fast`, about 6 s with the reranker (20 passages rescored instead of
-10). Set 2 was written separately, from the docstrings of files other than set 1's; but grouping
-small pieces was chosen after running it (it scored 0.85 without): neither set is fully neutral
-any more. These figures come from a single repository. The questions are in French.
+10). Grouping small pieces was chosen after running set 2 (it scored 0.85 without), so that set is
+no longer fully neutral. These figures come from a single repository. The questions are in French.
 
 ## Secrets
 

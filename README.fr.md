@@ -338,8 +338,16 @@ suivante quand un fichier change. La première fois, le sens est long : environ 
 fichiers. Un worktree git a son propre index des mots mais reprend les vecteurs du dépôt principal :
 il est prêt en quelques secondes.
 
-Mesuré sur une application de 200 fichiers (Python et YAML), deux jeux de 40 questions « où
-est le code qui… », formulées sans les noms du code ; rang du premier bon fichier (MRR) :
+Mesuré sur une application de 200 fichiers (Python et YAML), avec deux jeux de 40 questions « où
+est le code qui… », formulées sans les noms du code :
+
+- **jeu 1** : écrit par l'agent qui a développé `mem code`, en lisant le code ; il a servi à régler
+  le reclasseur (20 passages de 600 caractères) ;
+- **jeu 2** : écrit ensuite par un autre agent, sur d'autres fichiers, d'après leurs docstrings,
+  sans voir les résultats. Plus de reformulations : il est plus dur (`grep` y tombe à 0,26).
+
+Chiffre donné : le MRR, moyenne de 1/rang du premier bon fichier (1 = toujours en tête ; une
+question sur 40 pèse environ 0,02).
 
 | | jeu 1 | jeu 2 |
 |---|---|---|
@@ -349,10 +357,14 @@ est le code qui… », formulées sans les noms du code ; rang du premier bon fi
 | `mem code --vite` | 0,87 | 0,78 |
 | `mem code` | 0,94 | 0,90 |
 
+Sur le jeu 2, `mem code` rate 3 questions que memtomem rattrape en partie : des reformulations
+sans aucun mot commun avec le code (« un cadenas posé sur le disque » pour un verrou de fichier). Le
+bon fichier n'entre alors pas dans les 20 candidats que mem donne au reclasseur, qui ne peut donc
+pas le remonter. Sur le jeu 1, c'est l'inverse ; en moyenne, les deux se valent.
+
 Temps d'une recherche : 0,3 s avec `--vite`, environ 6 s avec le reclasseur (20 passages renotés au
-lieu de 10). Le jeu 2 a été écrit à part, à partir des docstrings d'autres fichiers que le jeu 1 ;
-mais le regroupement des petits morceaux a été choisi après l'avoir passé (il faisait 0,85 sans) :
-aucun des deux jeux n'est plus tout à fait neutre. Ces chiffres viennent d'un seul dépôt.
+lieu de 10). Le regroupement des petits morceaux a été choisi après avoir passé le jeu 2 (il faisait
+0,85 sans) : ce jeu n'est donc plus tout à fait neutre. Ces chiffres viennent d'un seul dépôt.
 
 ## Secrets
 
