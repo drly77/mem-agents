@@ -366,6 +366,24 @@ Temps d'une recherche : 0,3 s avec `--vite`, environ 6 s avec le reclasseur (20 
 lieu de 10). Le regroupement des petits morceaux a été choisi après avoir passé le jeu 2 (il faisait
 0,85 sans) : ce jeu n'est donc plus tout à fait neutre. Ces chiffres viennent d'un seul dépôt.
 
+**Avec un agent.** Le même dépôt, 20 questions du jeu 2, un agent Claude Sonnet en session isolée
+(`claude -p`) : d'un côté les outils de lecture et de recherche de Claude Code (Read, Grep, Glob),
+de l'autre les mêmes plus `mem code`.
+
+| | agent + grep | agent + `mem code` |
+|---|---|---|
+| bon fichier trouvé | 18/20 | 19/20 |
+| appels d'outils (total ; médiane par question) | 62 ; 2,5 | 29 ; 1 |
+| tours | 3,5 | 2 |
+| jetons écrits par l'agent | 13,3 k | 8,2 k |
+| coût des 20 sessions | 1,29 $ | 1,06 $ (−18 %) |
+| durée médiane d'une session | 10 s | 14 s |
+
+Dans 17 sessions sur 20, un seul `mem code` a suffi à répondre. Un agent qui sait chercher fait déjà
+bien mieux que le `grep` mécanique du banc : le gain porte surtout sur les appels, les tours et les
+jetons, pas sur la justesse. Chaque recherche reclassée coûte environ 6 s, d'où la durée un peu plus
+longue. Petit essai : 20 questions, un modèle, un dépôt.
+
 ## Secrets
 
 Une ligne qui ressemble à un secret (clé privée, jeton connu, `password: …`, URL à identifiants,

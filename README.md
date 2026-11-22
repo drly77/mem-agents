@@ -356,6 +356,24 @@ Time per search: 0.3 s with `--fast`, about 6 s with the reranker (20 passages r
 10). Grouping small pieces was chosen after running set 2 (it scored 0.85 without), so that set is
 no longer fully neutral. These figures come from a single repository. The questions are in French.
 
+**With an agent.** Same repository, 20 questions from set 2, a Claude Sonnet agent in an isolated
+session (`claude -p`): on one side Claude Code's read and search tools (Read, Grep, Glob), on the
+other the same plus `mem code`.
+
+| | agent + grep | agent + `mem code` |
+|---|---|---|
+| right file found | 18/20 | 19/20 |
+| tool calls (total; median per question) | 62; 2.5 | 29; 1 |
+| turns | 3.5 | 2 |
+| tokens written by the agent | 13.3k | 8.2k |
+| cost of the 20 sessions | $1.29 | $1.06 (−18%) |
+| median session time | 10 s | 14 s |
+
+In 17 sessions out of 20, a single `mem code` was enough to answer. An agent that knows how to
+search already does far better than the bench's mechanical `grep`: the gain is mostly in calls,
+turns and tokens, not accuracy. Each reranked search costs about 6 s, hence the slightly longer
+time. A small trial: 20 questions, one model, one repository.
+
 ## Secrets
 
 A line that looks like a secret (private key, known token format, `password: …`, URL with credentials,
