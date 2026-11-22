@@ -371,7 +371,7 @@ other the same plus `mem code`.
 
 In 17 sessions out of 20, a single `mem code` was enough to answer. An agent that knows how to
 search already does far better than the bench's mechanical `grep`: the gain is mostly in calls,
-turns and tokens, not accuracy. Each reranked search costs about 6 s, hence the slightly longer
+turns and tokens; accuracy is about the same (19/20 against 18/20, a single question apart). Each reranked search costs about 6 s, hence the slightly longer
 time. A small trial: 20 questions, one model, one repository.
 
 ## Secrets

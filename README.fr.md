@@ -381,7 +381,7 @@ de l'autre les mêmes plus `mem code`.
 
 Dans 17 sessions sur 20, un seul `mem code` a suffi à répondre. Un agent qui sait chercher fait déjà
 bien mieux que le `grep` mécanique du banc : le gain porte surtout sur les appels, les tours et les
-jetons, pas sur la justesse. Chaque recherche reclassée coûte environ 6 s, d'où la durée un peu plus
+jetons ; la justesse est à peu près la même (19/20 contre 18/20, une seule question d'écart). Chaque recherche reclassée coûte environ 6 s, d'où la durée un peu plus
 longue. Petit essai : 20 questions, un modèle, un dépôt.
 
 ## Secrets
