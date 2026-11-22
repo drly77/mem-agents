@@ -516,6 +516,8 @@ def vecteurs(textes: list[str], delai: float = SENS_DELAI) -> list | None:
 
 
 def base_sens(base: Path) -> Path:
+    if MODE_CODE and SENS_CODE is not None:
+        return SENS_CODE
     # « x.db » -> « x.sens.db » (nom historique) ; tout autre nom garde le sien entier : x.sqlite -> x.sqlite.sens.db
     return base.with_suffix(".sens.db") if base.suffix == ".db" else base.with_name(base.name + ".sens.db")  # cache des vecteurs, par empreinte du passage : survit aux réindexations
 
@@ -528,7 +530,7 @@ def calculer_sens(con: sqlite3.Connection, base: Path) -> None:
     lignes = con.execute("SELECT rowid, titre, texte FROM passages").fetchall()
     cles = {r[0]: hashlib.sha256(f"{SENS_MODELE}\0{r[1]}\0{r[2]}".encode()).hexdigest() for r in lignes}
     os.close(os.open(base_sens(base), os.O_CREAT | os.O_WRONLY, 0o600))  # créé 0600 d'emblée, jamais avec l'umask
-    cache = sqlite3.connect(base_sens(base))
+    cache = sqlite3.connect(base_sens(base), timeout=120)  # mem code : un worktree peut écrire en même temps
     try:
         os.chmod(base_sens(base), 0o600)
         cache.execute("CREATE TABLE IF NOT EXISTS v(h TEXT PRIMARY KEY, v BLOB)")
@@ -563,8 +565,9 @@ def notes(racine: Path):
 
 # mem code : chercher dans le code d'un dépôt, avec les mêmes index, fusion et reclasseur que pour les notes.
 MODE_CODE = False  # vrai pour « mem code » : fichiers de code au lieu des notes .md
-EXT_CODE = {".py", ".yaml", ".yml", ".sh", ".js", ".ts", ".toml"}  # $MEM_CODE_EXT (« .py,.sh ») les remplace
-CODE_TAILLE_FICHIER = 500_000  # octets : au-delà (données, fichier minifié), le fichier n'est pas indexé
+EXT_CODE = {".py", ".yaml", ".yml", ".sh", ".js", ".ts", ".toml", ".html"}  # $MEM_CODE_EXT (« .py,.sh ») les remplace
+CODE_TAILLE_FICHIER = 1_000_000  # octets : au-delà (données), le fichier n'est pas indexé ; « .min. » jamais
+SENS_CODE: Path | None = None  # mem code : cache des vecteurs commun au dépôt principal et à ses worktrees
 CODE_LIGNES = 60  # une fonction plus longue est recoupée en morceaux de CODE_LIGNES lignes
 # Banc de code (40 questions sur une application FastAPI, 22/11/2026) : renoter 20 passages coupés à 600 caractères
 # fait aussi bien que 20 passages entiers (MRR 0,91) en deux fois moins de temps (~7 s).
@@ -581,6 +584,17 @@ def depot_courant() -> Path | None:
     return Path(r.stdout.strip()) if r.stdout.strip() else None
 
 
+def depot_principal(depot: Path) -> Path:
+    """Le dépôt principal d'un worktree git (le dépôt lui-même sinon)."""
+    try:
+        r = subprocess.run(["git", "-C", str(depot), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                           capture_output=True, text=True, timeout=30, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return depot
+    commun = Path(r.stdout.strip())
+    return commun.parent if r.stdout.strip() and commun.name == ".git" else depot
+
+
 def fichiers_code(racine: Path) -> list[Path]:
     """Les fichiers suivis par git (jamais .env, données ni journaux non suivis) ; hors dépôt git, l'arborescence
     sans dossiers cachés ni dépendances. Ni lien symbolique (il pourrait sortir du dépôt) ni très gros fichier."""
@@ -592,8 +606,8 @@ def fichiers_code(racine: Path) -> list[Path]:
     except (OSError, subprocess.SubprocessError):
         chemins = [p for p in racine.rglob("*") if not any(x.startswith(".") or x in IGNORES_CODE
                                                            for x in p.relative_to(racine).parts)]
-    return sorted(p for p in chemins if p.suffix.lower() in exts and not p.is_symlink() and p.is_file()
-                  and p.stat().st_size <= CODE_TAILLE_FICHIER)
+    return sorted(p for p in chemins if p.suffix.lower() in exts and ".min." not in p.name.lower()
+                  and not p.is_symlink() and p.is_file() and p.stat().st_size <= CODE_TAILLE_FICHIER)
 
 
 def morceaux_python(texte: str, nb: int) -> list[tuple[int, int, str]]:
@@ -2189,6 +2203,13 @@ def selftest() -> int:
                 rc2 = main(["code", "--depot", str(depot), "--vite", "zorglub"])
             cas(tr("code : index et recherche par mots", "code: index and word search"),
                 rc1 == 0 and rc2 == 0 and "paquet/outil.py:1" in out.getvalue() and ".cache" not in out.getvalue())
+            git = ["git", "-c", "user.name=mem", "-c", "user.email=mem@test", "-C", str(depot)]
+            subprocess.run([*git, "init", "-q"], check=True)
+            subprocess.run([*git, "add", "-A"], check=True)
+            subprocess.run([*git, "commit", "-qm", "essai"], check=True)
+            subprocess.run([*git, "worktree", "add", "-q", str(Path(tmp) / "branche")], check=True)
+            cas(tr("code : un worktree reprend les vecteurs du dépôt principal", "code: a worktree reuses the main repository's vectors"),
+                depot_principal(Path(tmp) / "branche") == depot and depot_principal(depot) == depot)
         finally:
             MODE_CODE, K_RECLASSE, LONGUEUR_RECLASSE, CODE_REGROUPE = anciens_code
             for cle, val in anciens_env.items():
@@ -2616,7 +2637,7 @@ def conv_etat(base: Path, source: Path) -> int:
 
 def code(args) -> int:
     """mem code : chercher dans le code du dépôt courant (ou --depot), index à part (~/.local/share/mem/<dépôt>.code.db)."""
-    global MODE_CODE, K_RECLASSE, LONGUEUR_RECLASSE
+    global MODE_CODE, K_RECLASSE, LONGUEUR_RECLASSE, SENS_CODE
     depot = args.depot.expanduser() if args.depot else depot_courant()
     if depot is None or not depot.is_dir():
         print(tr("mem code : pas de dépôt git ici ; donner --depot DOSSIER", "mem code: no git repository here; pass --repo DIR"),
@@ -2624,7 +2645,12 @@ def code(args) -> int:
         return 2
     depot = depot.resolve()
     MODE_CODE, K_RECLASSE, LONGUEUR_RECLASSE = True, K_RECLASSE_CODE, LONGUEUR_RECLASSE_CODE
-    base = Path(os.environ["MEM_CODE_DB"]).expanduser() if os.environ.get("MEM_CODE_DB") else _donnees(depot, ".code.db")
+    if os.environ.get("MEM_CODE_DB"):
+        base = Path(os.environ["MEM_CODE_DB"]).expanduser()
+    else:  # un worktree a son index des mots, mais reprend les vecteurs du dépôt principal : rien à recalculer
+        principal = depot_principal(depot)
+        base = _donnees(principal, ".code.db" if principal == depot else f".{depot.name}.code.db")
+        SENS_CODE = base_sens(_donnees(principal, ".code.db"))
     if args.indexer:
         total, _ = indexer(depot, base)
         print(tr(f"{total} passages de code indexés", f"{total} code passages indexed"))

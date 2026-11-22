@@ -315,15 +315,18 @@ The same search as for notes (words, meaning, reranker), over a repository's cod
 for "where is the code that does X" without knowing its names usually fires off `grep`s by guesswork;
 `mem code` gives it the files and lines to read.
 
-What is read: files tracked by git (`.py`, `.yaml`, `.yml`, `.sh`, `.js`, `.ts`, `.toml`); outside
-a git repository, the tree without hidden folders or dependencies (`node_modules`, `venv`…). Never a
-symbolic link or a file over 500 KB. Python is cut by function, class and method (decorators
-included), the rest by blocks; small neighboring pieces are grouped up to about 1,500 characters.
-Code is indexed as is, without the notes'
-secret filter: the index holds nothing the repository does not already show (outside git, a
-secrets file that is not hidden would be read; point `--repo` at the code folder only). The index is separate
-(`~/.local/share/mem/<repo>.code.db`, 0600) and is refreshed on the next search when a file
-changes. The first time, meaning takes a while: about 6 minutes for 200 files.
+What is read: files tracked by git (`.py`, `.yaml`, `.yml`, `.sh`, `.js`, `.ts`, `.toml`, `.html`);
+outside a git repository, the tree without hidden folders or dependencies (`node_modules`, `venv`…).
+Never a symbolic link, a minified file (`.min.`) or a file over 1 MB. Python is cut by function,
+class and method (decorators included), the rest by blocks; small neighboring pieces are grouped up
+to about 1,500 characters. Code is indexed as is, without the notes' secret filter: the index holds
+nothing the repository does not already show (outside git, a secrets file that is not hidden would
+be read; point `--repo` at the code folder only).
+
+The index is separate (`~/.local/share/mem/<repo>.code.db`, 0600) and is refreshed on the next
+search when a file changes. The first time, meaning takes a while: about 6 minutes for 200 files. A
+git worktree has its own word index but reuses the main repository's vectors: it is ready in a few
+seconds.
 
 Measured on a 200-file application (Python and YAML), two sets of 40 "where is the code that…"
 questions, worded without the code's names; rank of the first right file (MRR):
@@ -371,7 +374,7 @@ visible. The safest thing is still to never write a secret into agent memory.
 | `MEM_RETROUVER_POIDS_SENS` | weight of meaning in `mem recall` fusion (0.5) |
 | `MEM_UTILISATEUR` | name shown for your messages (otherwise `~/.config/mem/utilisateur`, or "user") |
 | `MEM_CODE_DB` | `mem code` database (otherwise `~/.local/share/mem/<repo>.code.db`) |
-| `MEM_CODE_EXT` | extensions read by `mem code`, comma-separated (`.py,.yaml,.yml,.sh,.js,.ts,.toml`) |
+| `MEM_CODE_EXT` | extensions read by `mem code`, comma-separated (`.py,.yaml,.yml,.sh,.js,.ts,.toml,.html`) |
 | `MEM_CODE_REGROUPE` | target size of `mem code`'s grouped passages, in characters (1500; 0: never grouped) |
 
 ### Synonyms, dates and conventions
