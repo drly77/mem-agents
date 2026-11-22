@@ -642,24 +642,12 @@ def morceaux_blocs(lignes: list[str], yaml: bool) -> list[tuple[int, int, str]]:
 
 
 def decouper_code(chemin: Path, racine: Path):
-    """Passages d'un fichier de code : même filtre des secrets que les notes, ligne par ligne, puis découpe."""
+    """Passages d'un fichier de code, texte tel quel : pas de filtre de secrets, l'index ne montre rien de plus que
+    le dépôt lui-même (fichiers suivis par git seulement) et le filtre des notes y prenait surtout du code ordinaire."""
     rel = str(chemin.relative_to(racine))
     brut = chemin.read_text(encoding="utf-8", errors="replace")
-    lignes, propres, refus, dans_bloc = brut.splitlines(), [], [], False
-    for n, l in enumerate(lignes, start=1):
-        if DEBUT_BLOC.search(l):
-            dans_bloc = True
-        if dans_bloc:
-            refus.append((rel, n, "bloc de clé"))
-            if FIN_BLOC.search(l):
-                dans_bloc = False
-            propres.append("")  # la ligne disparaît, les numéros restent justes
-            continue
-        texte, motif = masquer(l)
-        if motif:
-            refus.append((rel, n, motif + (MASQUEE if texte is not None else "")))
-            l = texte if texte is not None else ""
-        propres.append(l)
+    lignes = propres = brut.splitlines()
+    refus: list = []
     morceaux = None
     if chemin.suffix.lower() == ".py":
         try:
@@ -2166,7 +2154,7 @@ def selftest() -> int:
             for cle, val in anciens.items():
                 os.environ.pop(cle, None) if val is None else os.environ.update({cle: val})
 
-    # mem code : découpe par fonction et classe, secrets masqués, dossiers cachés exclus hors git, recherche par mots.
+    # mem code : découpe par fonction et classe, texte tel quel, dossiers cachés exclus hors git, recherche par mots.
     anciens_code = (MODE_CODE, K_RECLASSE, LONGUEUR_RECLASSE, CODE_REGROUPE)
     anciens_env = {k: os.environ.get(k) for k in ("MEM_SENS", "MEM_CODE_DB", "GIT_CEILING_DIRECTORIES")}
     with tempfile.TemporaryDirectory(prefix="mem-test-code-") as tmp:
@@ -2189,8 +2177,8 @@ def selftest() -> int:
                    "code: one passage per function, class and method, decorator included"),
                 [(r[1], r[5].split(" :: ")[1]) for r in seuls]
                 == [(1, "(module)"), (5, "zorglub"), (10, "Coffre"), (13, "Coffre.ouvrir")])
-            cas(tr("code : secret masqué dans le passage", "code: secret masked in the passage"),
-                bool(refus) and not any(FAUX in r[6] for r in seuls))
+            cas(tr("code : texte gardé tel quel, sans filtre de secrets", "code: text kept as is, no secret filter"),
+                not refus and any(FAUX in r[6] for r in seuls))
             CODE_REGROUPE = 1500
             ensemble, _ = decouper_code(depot / "paquet" / "outil.py", depot)
             cas(tr("code : petits morceaux voisins regroupés", "code: small neighbouring pieces grouped"),
@@ -2638,9 +2626,8 @@ def code(args) -> int:
     MODE_CODE, K_RECLASSE, LONGUEUR_RECLASSE = True, K_RECLASSE_CODE, LONGUEUR_RECLASSE_CODE
     base = Path(os.environ["MEM_CODE_DB"]).expanduser() if os.environ.get("MEM_CODE_DB") else _donnees(depot, ".code.db")
     if args.indexer:
-        total, refus = indexer(depot, base)
-        print(tr(f"{total} passages de code indexés, {refus} lignes masquées ou retirées",
-                 f"{total} code passages indexed, {refus} lines masked or withheld"))
+        total, _ = indexer(depot, base)
+        print(tr(f"{total} passages de code indexés", f"{total} code passages indexed"))
         return 0
     if args.bench:
         return bench(depot, base, args.bench)

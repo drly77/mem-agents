@@ -328,7 +328,9 @@ Ce qui est lu : les fichiers suivis par git (`.py`, `.yaml`, `.yml`, `.sh`, `.js
 hors dépôt git, l'arborescence sans dossiers cachés ni dépendances (`node_modules`, `venv`…). Jamais
 de lien symbolique ni de fichier de plus de 500 Ko. Le Python est découpé par fonction, classe et
 méthode (décorateurs compris), le reste par blocs ; les petits morceaux voisins sont regroupés
-jusqu'à 1 500 caractères environ. Le filtre de secrets des notes s'applique ligne par ligne.
+jusqu'à 1 500 caractères environ. Le code est indexé tel quel, sans le filtre de secrets des
+notes : l'index ne contient rien que le dépôt ne montre déjà (hors dépôt git, un fichier de
+secrets qui n'est pas caché serait lu ; donnez alors `--depot` sur le seul dossier du code).
 L'index est à part (`~/.local/share/mem/<dépôt>.code.db`, 0600) et se met à jour à la recherche
 suivante quand un fichier change. La première fois, le sens est long : environ 6 minutes pour 200
 fichiers.

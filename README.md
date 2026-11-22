@@ -319,7 +319,9 @@ What is read: files tracked by git (`.py`, `.yaml`, `.yml`, `.sh`, `.js`, `.ts`,
 a git repository, the tree without hidden folders or dependencies (`node_modules`, `venv`…). Never a
 symbolic link or a file over 500 KB. Python is cut by function, class and method (decorators
 included), the rest by blocks; small neighboring pieces are grouped up to about 1,500 characters.
-The notes' secret filter applies line by line. The index is separate
+Code is indexed as is, without the notes'
+secret filter: the index holds nothing the repository does not already show (outside git, a
+secrets file that is not hidden would be read; point `--repo` at the code folder only). The index is separate
 (`~/.local/share/mem/<repo>.code.db`, 0600) and is refreshed on the next search when a file
 changes. The first time, meaning takes a while: about 6 minutes for 200 files.
 
