@@ -61,6 +61,7 @@ langue du système (français si `LANG` commence par `fr`, anglais sinon) ; `MEM
 mem chercher "qui a le droit de déployer ?"
 mem chercher --vite "migration base"        # sans reclassement : ~0,3 s
 mem chercher --dans project/ "relais"       # seulement ce sous-dossier (ou une note : project/x.md)
+mem chercher --json "relais" | jq -r .ref   # une ligne JSON par résultat, pour un script (aussi : retrouver, code)
 mem voir project/deploiement.md:12
 mem ajouter --type feedback "titre" < texte
 mem etat                                     # notes, passages, lignes écartées comme secrets

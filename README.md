@@ -57,6 +57,7 @@ both work. Help and messages follow your locale (French if `LANG` starts with `f
 mem search "who is allowed to deploy?"       # search
 mem search --fast "database migration"       # no reranking: ~0.3 s
 mem search --in project/ "relay"             # only this subfolder (or one note: project/x.md)
+mem search --json "relay" | jq -r .ref      # one JSON line per result, for scripts (also: recall, code)
 mem show project/deploiement.md:12           # show a passage in context
 mem add --type feedback "title" < text       # add a note
 mem status                                   # notes, passages, lines withheld as secrets

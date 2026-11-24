@@ -1103,6 +1103,13 @@ def afficher(resultats):
         print()
 
 
+def afficher_json(resultats, dossier) -> None:
+    """--json : une ligne JSON par résultat (JSON Lines), texte entier ; « ref » se passe tel quel à mem voir."""
+    for rang, (fichier, ligne, date, type_, titre, texte, _) in enumerate(resultats, 1):
+        print(json.dumps({"ref": f"{fichier}:{ligne}", "fichier": fichier, "ligne": ligne, "date": date, "type": type_,
+                          "titre": titre, "texte": texte, "dossier": str(dossier), "rang": rang}, ensure_ascii=False))
+
+
 def voir(racine: Path, base: Path, cible: str) -> int:
     fichier, _, ligne = cible.rpartition(":")
     if not fichier or not ligne.isdigit():
@@ -1950,6 +1957,24 @@ def selftest() -> int:
                    "index: short secret in the description absent"), "cle api: abcd" not in tout)
             cas(tr("chercher : plusieurs mots",
                    "search: several words"), any(r[0] == "project/pieges.md" for r in chercher(racine, base, "wireguard relais")))
+            avant_env = {k: os.environ.get(k) for k in ("MEM_DB", "AGENT_NOM")}
+            os.environ["MEM_DB"] = str(base)
+            os.environ.pop("AGENT_NOM", None)
+            try:
+                with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
+                    rc = main(["--dossier", str(racine), "chercher", "--json", "--vite", "wireguard", "relais"])
+                    rc_vide = main(["--dossier", str(racine), "chercher", "--json", "--vite", "zorglubxyz"])
+                lignes = [json.loads(l) for l in out.getvalue().splitlines()]
+            except ValueError:
+                rc, lignes = 1, []
+            finally:
+                for k, val in avant_env.items():
+                    os.environ.pop(k, None) if val is None else os.environ.update({k: val})
+            cas(tr("chercher --json : une ligne JSON par résultat, ref « fichier:ligne », rien si aucun résultat",
+                   "search --json: one JSON line per result, ref \"file:line\", nothing when no result"),
+                rc == 0 and rc_vide == 0 and bool(lignes) and lignes[0]["fichier"] == "project/pieges.md"
+                and lignes[0]["ref"] == f"{lignes[0]['fichier']}:{lignes[0]['ligne']}" and lignes[0]["rang"] == 1
+                and lignes[0]["dossier"] == str(racine) and FAUX not in out.getvalue())
             for d in ("feedback", "projectx"):
                 (racine / d).mkdir()
                 (racine / d / "relais.md").write_text(f"---\nname: relais\nmetadata:\n  type: {d}\n---\n\nwireguard relais {d}\n",
@@ -2134,6 +2159,12 @@ def selftest() -> int:
             cas(tr("retrouver : auteur de chaque message (humain, agent, pair, canal)",
                    "recall: author of each message (human, agent, peer, channel)"),
                 [a for _, a in auteurs] == ["alice", "agt-test", "pair:agt-revue", "alice (Salon)"])
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                conv_afficher_json(coffre, "coffre expire")
+            j = [json.loads(l) for l in out.getvalue().splitlines()]
+            cas(tr("retrouver --json : ref « session:ligne » pour --voir, secret masqué", "recall --json: ref \"session:line\" for --show, secret masked"),
+                bool(j) and j[0]["ref"] == f"{j[0]['session'][:8]}:{j[0]['ligne']}" and FAUX not in out.getvalue()
+                and isinstance(j[0]["extrait"], list))
             cas(tr("retrouver : projet lu sans le dossier personnel", "recall: project read without the home folder"),
                 conv_chercher(CONV_BASE, "bascule")[0][6] == "src/app")
             with open(f, "a") as h:
@@ -2201,6 +2232,14 @@ def selftest() -> int:
             with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
                 rc1 = main(["code", "--depot", str(depot), "--indexer"])
                 rc2 = main(["code", "--depot", str(depot), "--vite", "zorglub"])
+            with contextlib.redirect_stdout(io.StringIO()) as out_j, contextlib.redirect_stderr(io.StringIO()):
+                rc3 = main(["code", "--depot", str(depot), "--vite", "--json", "zorglub"])
+            try:
+                j = [json.loads(l) for l in out_j.getvalue().splitlines()]
+            except ValueError:
+                j = []
+            cas(tr("code --json : une ligne JSON par résultat", "code --json: one JSON line per result"),
+                rc3 == 0 and any(x["ref"] == "paquet/outil.py:1" for x in j))
             cas(tr("code : index et recherche par mots", "code: index and word search"),
                 rc1 == 0 and rc2 == 0 and "paquet/outil.py:1" in out.getvalue() and ".cache" not in out.getvalue())
             git = ["git", "-c", "user.name=mem", "-c", "user.email=mem@test", "-C", str(depot)]
@@ -2581,6 +2620,14 @@ def conv_afficher(resultats: list[tuple], question: str = "") -> None:
         print()
 
 
+def conv_afficher_json(resultats: list[tuple], question: str = "") -> None:
+    """--json : une ligne JSON par message ; « ref » se passe tel quel à mem retrouver --voir."""
+    for rang, (session, ligne, date, qui, agent, texte, projet, _) in enumerate(resultats, 1):
+        print(json.dumps({"ref": f"{session[:8]}:{ligne}", "session": session, "ligne": ligne, "date": date, "qui": qui,
+                          "agent": agent, "projet": projet, "extrait": conv_extrait(texte, question), "texte": texte,
+                          "rang": rang}, ensure_ascii=False))
+
+
 def conv_voir(base: Path, cible: str, autour: int = 3) -> int:
     m = re.fullmatch(r"([0-9a-f-]{4,36}):(\d+)", cible)
     if not m:
@@ -2669,7 +2716,8 @@ def code(args) -> int:
             return 2
     print(tr(f"(code : {depot}" + (f", dans {dans}" if dans else "") + ")",
              f"(code: {depot}" + (f", in {dans}" if dans else "") + ")"), file=sys.stderr)
-    afficher(chercher(depot, base, " ".join(args.mots), args.n, reclasse=not args.vite, dans=dans))
+    res = chercher(depot, base, " ".join(args.mots), args.n, reclasse=not args.vite, dans=dans)
+    afficher_json(res, depot) if args.json else afficher(res)
     return 0
 
 
@@ -2693,8 +2741,9 @@ def retrouver(args) -> int:
     if ajoutes > 2000:
         print(tr(f"mem : {ajoutes} passages ajoutés ; « mem retrouver --indexer » calcule leur sens",
                  f"mem: {ajoutes} passages added; \"mem recall --index\" computes their embeddings"), file=sys.stderr)
-    conv_afficher(conv_chercher(base, question, args.n, args.qui, args.agent, args.depuis, args.jusqua, args.projet,
-                                reclasse=args.reclasser), question)
+    res = conv_chercher(base, question, args.n, args.qui, args.agent, args.depuis, args.jusqua, args.projet,
+                        reclasse=args.reclasser)
+    conv_afficher_json(res, question) if args.json else conv_afficher(res, question)
     print(tr("Indice daté, pas un état : vérifier en direct avant de l'affirmer.",
              "A dated clue, not current state: check live before stating it."), file=sys.stderr)
     return 0
@@ -2743,6 +2792,8 @@ def main(argv=None) -> int:
     c.add_argument(*deux_noms("--vite", "--fast"), dest="vite", action="store_true",
                    help=tr("sans reclassement par le modèle local (0,3 s au lieu de ~3-4 s)",
                            "no reranking by the local model (0.3 s instead of ~3-4 s)"))
+    c.add_argument("--json", action="store_true", help=tr("une ligne JSON par résultat (JSON Lines), texte entier, pour les scripts",
+                           "one JSON line per result (JSON Lines), full text, for scripts"))
     v = commande(sub, "voir", "show", parents=[commun],
                        help=tr("montrer un passage dans son contexte", "show a passage in context"))
     v.add_argument("cible", metavar=tr("fichier:ligne", "file:line"))
@@ -2822,6 +2873,8 @@ def main(argv=None) -> int:
                            "local reranker too (~3-4 s, no measured gain here)"))
     r.add_argument(*deux_noms("--voir", "--show"), dest="voir", metavar=tr("SESSION:LIGNE", "SESSION:LINE"),
                    help=tr("le message et ses voisins", "the message and its neighbours"))
+    r.add_argument("--json", action="store_true", help=tr("une ligne JSON par résultat (JSON Lines), texte entier, pour les scripts",
+                           "one JSON line per result (JSON Lines), full text, for scripts"))
     r.add_argument("--autour", "--around", dest="autour", type=int, default=3, help=argparse.SUPPRESS)
     r.add_argument(*deux_noms("--indexer", "--index"), dest="indexer", action="store_true",
                    help=tr("ajouter les nouveaux messages (le sens peut être long la 1re fois)",
@@ -2844,6 +2897,8 @@ def main(argv=None) -> int:
     co.add_argument(*deux_noms("--indexer", "--index"), dest="indexer", action="store_true",
                     help=tr("refaire l'index du code (la 1re fois, le sens peut prendre plusieurs minutes)",
                             "rebuild the code index (the first time, embeddings can take several minutes)"))
+    co.add_argument("--json", action="store_true", help=tr("une ligne JSON par résultat (JSON Lines), texte entier, pour les scripts",
+                           "one JSON line per result (JSON Lines), full text, for scripts"))
     co.add_argument("--bench", type=Path, metavar=tr("QUESTIONS", "QUESTIONS"),
                     help=tr("top 1, top 3, MRR : une ligne « question<TAB>fichier,fichier »",
                             "top 1, top 3, MRR: one line \"question<TAB>file,file\""))
@@ -2879,8 +2934,9 @@ def main(argv=None) -> int:
                 return 2
         print(tr(f"(mémoire : {racine}" + (f", dans {dans}" if dans else "") + ")",
                  f"(memory: {racine}" + (f", in {dans}" if dans else "") + ")"), file=sys.stderr)
-        afficher(chercher(racine, base, args.mots, args.n, args.type, args.depuis, args.archives, auteur,
-                          reclasse=not args.vite, dans=dans))
+        sortie = (lambda res, d: afficher_json(res, d)) if args.json else (lambda res, d: afficher(res))
+        sortie(chercher(racine, base, args.mots, args.n, args.type, args.depuis, args.archives, auteur,
+                        reclasse=not args.vite, dans=dans), racine)
         if args.tous:
             liste = Path.home() / ".config" / "mem" / "dossiers"
             try:
@@ -2895,8 +2951,8 @@ def main(argv=None) -> int:
                 autre = Path(autre).expanduser()
                 if autre.is_dir() and autre.resolve() != racine.resolve():
                     print(f"── {autre}", file=sys.stderr)  # stdout : les résultats seulement
-                    afficher(chercher(autre, base_par_defaut(autre), args.mots, args.n, args.type, args.depuis, args.archives,
-                                      reclasse=not args.vite, dans=dans))
+                    sortie(chercher(autre, base_par_defaut(autre), args.mots, args.n, args.type, args.depuis, args.archives,
+                                    reclasse=not args.vite, dans=dans), autre)
     elif args.cmd == "voir":
         return voir(racine, base, args.cible)
     elif args.cmd == "ajouter":
