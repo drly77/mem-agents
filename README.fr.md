@@ -37,7 +37,7 @@ se relisent entre eux et lancent les tests.
 
 **`mem` s'arrête à la recherche.** Une chaîne RAG va chercher des passages, les colle d'elle-même dans
 l'invite du modèle, et lui fait rédiger une réponse à partir d'eux. `mem` ne fait que la première
-étape : c'est une commande de recherche que l'agent lance quand il en a besoin, comme `grep`. Elle
+étape : c'est une commande que l'agent lance quand il en a besoin, au même titre que `grep`. Mais `grep` ne trouve que les mots exacts ; `mem` trouve aussi un passage écrit avec d'autres mots, et classe les résultats du plus pertinent au moins pertinent. Elle
 rend des passages classés, avec leur emplacement (`note:ligne`) ; aucun modèle ne rédige de réponse,
 et rien n'est ajouté à l'invite dans le dos de l'agent. L'agent lit les passages, ouvre la note au
 besoin, et la cite. Le reclassement ne fait que réordonner les résultats, il ne génère aucun texte.

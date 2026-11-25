@@ -34,8 +34,7 @@ other's work and run the tests.
 ## What `mem` does
 
 **`mem` stops at search.** A RAG pipeline retrieves passages, pastes them into the model's prompt on
-its own, and has the model write an answer from them. `mem` only does the first step: it is a search
-command that the agent calls when it needs it, like `grep`. It returns ranked passages with their
+its own, and has the model write an answer from them. `mem` only does the first step: it is a command the agent runs when it needs it, just as it would run `grep`. But `grep` only finds the exact words; `mem` also finds a passage written in other words, and ranks the results from most to least relevant. It returns ranked passages with their
 location (`note:line`); no model writes an answer, and nothing is added to the prompt behind the
 agent's back. The agent reads the passages, opens the note if needed, and cites it. The reranker
 only reorders results, it never generates text. The hooks provided, all optional (below), only add short notices
