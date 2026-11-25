@@ -1577,6 +1577,12 @@ def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: st
     import contextlib
     import io
 
+    base = racine.resolve()
+    for rel in (note_rel, archive_rel):  # --note, --archive, MEM_POINT_* : jamais hors du dossier mémoire
+        if not (racine / rel).resolve().is_relative_to(base) or (racine / rel).resolve() == base:
+            print(tr(f"mem point : refusé, « {rel} » sort du dossier mémoire {racine}",
+                     f"mem handover: refused, \"{rel}\" is outside the memory folder {racine}"), file=sys.stderr)
+            return 2
     try:
         texte = (sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8")).strip() + "\n"
     except (OSError, UnicodeDecodeError) as e:
@@ -2069,6 +2075,19 @@ def selftest() -> int:
                 mauvais.write_text(contenu, encoding="utf-8")
                 with contextlib.redirect_stderr(io.StringIO()):
                     cas(nom, point(racine, str(mauvais), fichier_verrou=Path(tmp) / "v") == 2 and (racine / POINT_NOTE).read_text() == note_p)
+            mauvais.write_text("## POINT DE REPRISE 03/01\nx\n", encoding="utf-8")
+            hors = Path(tmp) / "hors.md"
+            (racine / "lien").symlink_to(Path(tmp))
+            for nom, kw in ((tr("point : --note absolue hors de la mémoire refusée", "handover: absolute --note outside memory refused"),
+                             {"note_rel": str(hors)}),
+                            (tr("point : --archive en ../ refusée", "handover: ../ --archive refused"),
+                             {"archive_rel": "../hors.md"}),
+                            (tr("point : --note par un lien vers l'extérieur refusée", "handover: --note through an outside link refused"),
+                             {"note_rel": "lien/hors.md"})):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    cas(nom, point(racine, str(mauvais), fichier_verrou=Path(tmp) / "v", **kw) == 2
+                        and not hors.exists() and (racine / POINT_NOTE).read_text() == note_p)
+            (racine / "lien").unlink()
             # numpy absent (python3 -I, par exemple) : pas de vecteurs, et un avis, une seule fois.
             err, garde, _AVIS_NUMPY[:] = io.StringIO(), sys.modules.get("numpy"), []
             sys.modules["numpy"] = None  # import numpy lève ImportError
