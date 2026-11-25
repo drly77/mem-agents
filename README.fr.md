@@ -37,9 +37,10 @@ se relisent entre eux et lancent les tests.
 
 **`mem` s'arrête à la recherche.** Une chaîne RAG va chercher des passages, les colle d'elle-même dans
 l'invite du modèle, et lui fait rédiger une réponse à partir d'eux. `mem` ne fait que la première
-étape : c'est une commande que l'agent lance quand il en a besoin, au même titre que `grep`. Mais `grep` ne trouve que les mots exacts ; `mem` trouve aussi un passage écrit avec d'autres mots, et classe les résultats du plus pertinent au moins pertinent. Elle
-rend des passages classés, avec leur emplacement (`note:ligne`) ; aucun modèle ne rédige de réponse,
-et rien n'est ajouté à l'invite dans le dos de l'agent. L'agent lit les passages, ouvre la note au
+étape : c'est une commande que l'agent lance quand il en a besoin, au même titre que `grep`. Mais
+`grep` ne trouve que les mots exacts ; `mem` trouve aussi un passage écrit avec d'autres mots. Il
+rend des passages classés du plus pertinent au moins pertinent, avec leur emplacement
+(`note:ligne`) ; aucun modèle ne rédige de réponse, et rien n'est ajouté à l'invite dans le dos de l'agent. L'agent lit les passages, ouvre la note au
 besoin, et la cite. Le reclassement ne fait que réordonner les résultats, il ne génère aucun texte.
 Les hooks fournis, tous facultatifs (plus bas), n'ajoutent que de courts avis au contexte : les noms des notes
 voisines après l'écriture d'une note, et, après un /clear, le rappel de relire le point de reprise.
@@ -104,7 +105,8 @@ Ce que nous avons fait :
 
 1. **Un plafond de contexte à 250 000 tokens** au lieu de la moitié de la fenêtre de 1 million
    (500 000) : au-delà, l'agent écrit son point de reprise et la session est vidée (/clear) ou
-   compactée. Chaque tour coûte alors au plus moitié moins qu'avant. Ce plafond est tenu chez nous
+   compactée. Le tour le plus cher coûte alors deux fois moins qu'avant : 250 000 tokens relus au
+   lieu de 500 000. Ce plafond est tenu chez nous
    par un hook `Stop` qui n'est pas fourni ici (voir la fin de la section suivante).
    250 000 est le meilleur compromis **pour notre usage** : assez de place pour une tâche longue
    (lecture de code, tests, relectures) sans vider la session au milieu, assez peu pour que chaque
@@ -131,7 +133,7 @@ l'accès à ce qu'on sort du démarrage.
 
 ![Avant et après : au pire 500 k puis 250 k tokens relus à chaque tour ; fichiers de démarrage 47 Ko → 12 Ko (−74 %) ; sous le plafond de 250 k, ~11 k tokens rendus à la conversation](docs/contexte.fr.svg)
 
-Les seuils sont exacts : compactage vers 500 000 tokens avant, plafond de 250 000 après. Les chiffres
+Les seuils sont des réglages, donc exacts : compactage vers 500 000 tokens avant, plafond de 250 000 après. Les chiffres
 du démarrage sont des ordres de grandeur, mesurés au premier tour de nos sessions (champ `usage` des
 transcriptions de Claude Code) : 46 000 à 60 000 tokens sur 3 sessions d'avant, 37 000 à 45 000 sur
 11 sessions d'après. La part de CLAUDE.md et MEMORY.md est estimée d'après leur taille, le reste revient
@@ -185,7 +187,7 @@ flowchart LR
    SHA-256, fait un essai, puis, avec `--service`, active une unité systemd utilisateur qui garde le
    modèle chargé et répond sur un socket Unix réservé à l'utilisateur. Sans carte graphique : `--cpu`.
    Avec une autre version de llama.cpp (CUDA, ROCm, ARM…) : `--llama-server CHEMIN`. L'installateur est écrit pour Linux.
-   Service arrêté, `mem` classe par mots et sens, et le signale.
+   Si le service est arrêté, `mem` classe par mots et sens seulement, et le signale.
 
    Sur certains systèmes (par exemple Ubuntu 24.04), les espaces de noms non privilégiés sont bloqués :
    `unshare -rn` échoue, et l'installateur écrit alors l'unité sans lui. Le reclasseur ne fait de toute
@@ -202,8 +204,9 @@ elle survit à la fin de la conversation. Claude Code offre deux façons de la v
 - **/compact** remplace la conversation par un résumé écrit par le modèle. La session continue, mais
   le résumé perd des détails (identifiants de commits, chemins, raisons d'une décision).
 - **/clear** repart d'une conversation vide. Il ne reste que les fichiers : CLAUDE.md, MEMORY.md et
-  les notes. C'est plus économique (chaque échange relit tout le contexte, qui repart presque vide) et plus net, à condition
-  que l'agent ait écrit ce qu'il doit savoir avant.
+  les notes. C'est plus économique (chaque échange relit tout le contexte, qui repart presque
+  vide), et rien ne dépend d'un résumé qui perd des détails, à condition que l'agent ait écrit
+  avant ce qu'il doit savoir.
 
 Le cycle proposé, avec les fichiers du dossier `integration/` :
 
@@ -269,7 +272,7 @@ Vulkan), avec une vraie mémoire de 183 notes.
 Qualité, sur un banc **privé** de 200 questions écrites par un autre agent à partir de cette mémoire
 (paraphrases, situations, états passés). MRR : moyenne de 1/rang de la bonne note (1 = toujours en tête).
 
-| | banc de 200 | banc de 50, servi aussi au choix du reclasseur |
+| | banc de 200 | banc de 50, qui a aussi servi à choisir le reclasseur |
 |---|---|---|
 | mots + sens | MRR 0,64 (114/200 en tête) | MRR 0,71 (32/50 en tête) |
 | mots + sens + reclassement | MRR 0,73 (135/200 en tête) | MRR 0,76 (35/50 en tête) |
@@ -293,10 +296,10 @@ garde que les échanges : les messages de l'utilisateur (tapés ou collés), ceu
 (messages entre agents) et le texte des réponses. Les sorties d'outils, les rappels système, les
 résumés de compaction, les contenus de skills et les sous-agents restent dehors. Chaque ligne passe
 par le même filtre de secrets que les notes. Les fichiers sont lus au fil de l'eau (seulement ce qui
-s'est ajouté) ; une recherche calcule le sens d'au plus 300 nouveaux passages, `--indexer` (par
+s'est ajouté) ; une recherche calcule au passage les vecteurs d'au plus 300 nouveaux passages, `--indexer` (par
 exemple toutes les heures dans une minuterie) fait le reste.
 
-Classement : mots (BM25) et sens (bge-m3) fusionnés, avec le même poids que pour les notes. Mesuré
+Classement : mots (BM25) et sens (bge-m3) fusionnés ; le sens compte pour moitié des mots, comme pour les notes. Mesuré
 sur trois petits bancs de vraies questions (54 au total, MRR) : ce réglage et un sens 8 fois plus
 lourd se valent en moyenne (0,71 et 0,69) ; le sens lourd gagne sur les questions reformulées, perd
 sur les mots-clés, et perd sur le seul jeu tenu à l'écart du réglage (0,67 contre 0,78). Le
@@ -361,10 +364,11 @@ question sur 40 pèse environ 0,02).
 Sur le jeu 2, `mem code` rate 3 questions que memtomem rattrape en partie : des reformulations
 sans aucun mot commun avec le code (« un cadenas posé sur le disque » pour un verrou de fichier). Le
 bon fichier n'entre alors pas dans les 20 candidats que mem donne au reclasseur, qui ne peut donc
-pas le remonter. Sur le jeu 1, c'est l'inverse ; en moyenne, les deux se valent.
+pas le remonter. Sur le jeu 1, c'est l'inverse ; en moyenne, `mem code` et memtomem avec notre
+reclasseur se valent (0,92).
 
-Temps d'une recherche : 0,3 s avec `--vite`, environ 6 s avec le reclasseur (20 passages renotés au
-lieu de 10). Le regroupement des petits morceaux a été choisi après avoir passé le jeu 2 (il faisait
+Temps d'une recherche : 0,3 s avec `--vite`, environ 6 s avec le reclasseur (20 passages renotés,
+contre 10 pour les notes). Le regroupement des petits morceaux a été choisi après avoir passé le jeu 2 (il faisait
 0,85 sans) : ce jeu n'est donc plus tout à fait neutre. Ces chiffres viennent d'un seul dépôt.
 
 **Avec un agent.** Le même dépôt, 20 questions du jeu 2, un agent Claude Sonnet en session isolée

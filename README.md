@@ -34,8 +34,9 @@ other's work and run the tests.
 ## What `mem` does
 
 **`mem` stops at search.** A RAG pipeline retrieves passages, pastes them into the model's prompt on
-its own, and has the model write an answer from them. `mem` only does the first step: it is a command the agent runs when it needs it, just as it would run `grep`. But `grep` only finds the exact words; `mem` also finds a passage written in other words, and ranks the results from most to least relevant. It returns ranked passages with their
-location (`note:line`); no model writes an answer, and nothing is added to the prompt behind the
+its own, and has the model write an answer from them. `mem` only does the first step: it is a command the agent runs when it needs it, just as it would run `grep`. But `grep`
+only finds the exact words; `mem` also finds a passage written in other words. It returns passages
+ranked from most to least relevant, with their location (`note:line`); no model writes an answer, and nothing is added to the prompt behind the
 agent's back. The agent reads the passages, opens the note if needed, and cites it. The reranker
 only reorders results, it never generates text. The hooks provided, all optional (below), only add short notices
 to the context: the names of similar notes after a note is written, and, after /clear, a reminder to
@@ -124,7 +125,7 @@ startup files stays within reach.
 
 ![Before and after: at worst 500k then 250k tokens reread every turn; startup files 47 KB → 12 KB (−74%); under the 250k ceiling, ~11k tokens given back to the conversation](docs/context.en.svg)
 
-The thresholds are exact: compaction around 500,000 tokens before, a 250,000 ceiling after. The startup
+The thresholds are settings, hence exact: compaction around 500,000 tokens before, a 250,000 ceiling after. The startup
 figures are orders of magnitude, measured on the first turn of our sessions (the `usage` field of Claude
 Code transcripts): 46,000 to 60,000 tokens over 3 sessions before, 37,000 to 45,000 over 11 sessions
 after. The share of CLAUDE.md and MEMORY.md is estimated from their size; the rest is Claude Code's own,
@@ -177,8 +178,8 @@ flowchart LR
    the Qwen3-Reranker-4B Q4_0 model from Hugging Face (2.4 GB), checks their SHA-256, runs a test, and,
    with `--service`, enables a systemd user unit that keeps the model loaded and answers on a Unix
    socket only the user can open. No GPU: `--cpu`. With another llama.cpp build (CUDA, ROCm, ARM…):
-   `--llama-server PATH`. The installer is written for Linux. When the service is stopped, `mem` ranks by words and meaning, and
-   says so.
+   `--llama-server PATH`. The installer is written for Linux.
+   When the service is stopped, `mem` ranks by words and meaning only, and says so.
 
    On some systems (Ubuntu 24.04 for instance), unprivileged user namespaces are blocked: `unshare -rn`
    fails, and the installer then writes the unit without it. The reranker makes no network calls anyway;
@@ -195,8 +196,9 @@ end of the conversation. Claude Code offers two ways to empty the context:
 - **/compact** replaces the conversation with a summary written by the model. The session goes on,
   but the summary loses details (commit ids, paths, the reason behind a decision).
 - **/clear** starts from an empty conversation. Only files remain: CLAUDE.md, MEMORY.md and the notes.
-  It is cheaper (every turn rereads the whole context, which now starts almost empty) and cleaner, provided the agent wrote down what
-  it needs to know beforehand.
+  It is cheaper (every turn rereads the whole context, which now starts almost empty), and nothing
+  depends on a summary that loses details, provided the agent wrote down what it needs to know
+  beforehand.
 
 The suggested cycle, with the files in `integration/` (written in French; translate them freely):
 
@@ -286,7 +288,7 @@ subagents stay out. Every line goes through the same secret filter as the notes.
 incrementally (only what was appended); a search embeds at most 300 new passages, `--index` (for
 instance hourly from a timer) does the rest.
 
-Ranking: words (BM25) and meaning (bge-m3) fused, with the same weight as for notes. Measured on
+Ranking: words (BM25) and meaning (bge-m3) fused; meaning counts half as much as words, as for notes. Measured on
 three small benches of real questions (54 in total, MRR): this setting and an 8 times heavier
 meaning weight are even on average (0.71 and 0.69); heavy meaning wins on rephrased questions, loses
 on keywords, and loses on the only set held out from tuning (0.67 against 0.78). The reranker gained
@@ -350,10 +352,11 @@ of 40 weighs about 0.02).
 On set 2, `mem code` misses 3 questions that memtomem partly recovers: rewordings sharing no word
 with the code ("a padlock on the disk" for a file lock). The right file then does not make it into
 the 20 candidates mem hands to the reranker, which therefore cannot lift it. On set 1 it is the other
-way round; on average the two are even.
+way round; on average, `mem code` and memtomem with our reranker are even
+(0.92).
 
-Time per search: 0.3 s with `--fast`, about 6 s with the reranker (20 passages rescored instead of
-10). Grouping small pieces was chosen after running set 2 (it scored 0.85 without), so that set is
+Time per search: 0.3 s with `--fast`, about 6 s with the reranker (20 passages rescored,
+against 10 for notes). Grouping small pieces was chosen after running set 2 (it scored 0.85 without), so that set is
 no longer fully neutral. These figures come from a single repository. The questions are in French.
 
 **With an agent.** Same repository, 20 questions from set 2, a Claude Sonnet agent in an isolated
