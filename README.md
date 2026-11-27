@@ -208,7 +208,8 @@ The suggested cycle, with the files in `integration/` (written in French; transl
    then type `/avant-clear`. The agent writes a handover note ("POINT DE REPRISE": verified state,
    work in progress, decisions, next step, "do this first") and files it with `mem handover`: the
    previous note goes **verbatim** into `archive/point-de-reprise.md`, a check makes sure no line was
-   lost (otherwise nothing is written), and the memory directory is committed if it is a git repo.
+   lost (otherwise nothing is written), and the memory directory is committed if it is a git repo
+   (as `--author` when git has no identity; a failed commit is reported).
 3. **Type /clear** (or /compact).
 4. **On restart, the hook puts the agent back on track**: install `integration/mem-reprise` on your
    PATH (`install -m 755 integration/mem-reprise ~/.local/bin/`) and merge

@@ -1663,8 +1663,15 @@ def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: st
         commit = ""
         if (racine / ".git").exists():
             subprocess.run(["git", "-C", str(racine), "add", str(note), str(archive)], check=False)
+            # Sans identité git (ni réglée, ni devinable depuis le nom de la machine), git refuse le commit :
+            # l'agent en tient lieu, sans écraser une identité réglée.
+            ident = []
+            nom_sain = re.sub(r"[^A-Za-z0-9._-]", "", auteur or "")
+            if nom_sain and subprocess.run(["git", "-C", str(racine), "var", "GIT_COMMITTER_IDENT"],
+                                           capture_output=True).returncode != 0:
+                ident = ["-c", f"user.name={nom_sain}", "-c", f"user.email={nom_sain}@localhost"]
             # « -- note archive » : le commit n'emporte que ces deux fichiers, jamais ce qui était déjà indexé.
-            r = subprocess.run(["git", "-C", str(racine), "commit", "-q", "-m",
+            r = subprocess.run(["git", "-C", str(racine), *ident, "commit", "-q", "-m",
                                 tr(f"{auteur or 'mem point'} : point de reprise archivé, point neuf",
                                    f"{auteur or 'mem handover'}: handover note archived, new one written"),
                                 "--", str(note), str(archive)],
@@ -1672,6 +1679,14 @@ def point(racine: Path, source: str, note_rel: str = POINT_NOTE, archive_rel: st
             if r.returncode == 0:
                 commit = subprocess.run(["git", "-C", str(racine), "rev-parse", "--short", "HEAD"],
                                         capture_output=True, text=True).stdout.strip()
+            else:  # jamais en silence : sans commit, la garde du contexte ne fera pas de /clear
+                raison = next((l.strip() for l in reversed((r.stderr or r.stdout).splitlines()) if l.strip()), "")
+                print(tr(f"mem point : commit raté ({raison or f'code {r.returncode}'}) ; note et archive sont "
+                         f"écrites mais pas commitées : commite-les toi-même (git -C {racine} -c user.name=<nom> "
+                         f"-c user.email=<nom>@localhost commit -- {note_rel} {archive_rel})",
+                         f"mem handover: commit failed ({raison or f'code {r.returncode}'}); note and archive are "
+                         f"written but not committed: commit them yourself (git -C {racine} -c user.name=<name> "
+                         f"-c user.email=<name>@localhost commit -- {note_rel} {archive_rel})"), file=sys.stderr)
     if corps.strip():
         ancien = tr(f"ancien point archivé dans {archive_rel} ({len(corps)} octets)",
                     f"previous note archived in {archive_rel} ({len(corps)} bytes)")
@@ -2059,6 +2074,34 @@ def selftest() -> int:
                 cas(tr("point : le commit n'emporte que la note et l'archive",
                        "handover: the commit takes only the note and the archive"),
                     sorted(dernier) == sorted([POINT_ARCHIVE, POINT_NOTE]) and "project/autre.md" in g("diff", "--cached", "--name-only").stdout)
+                # Sans identité git (useConfigOnly : rien de deviné depuis la machine) : l'agent en tient lieu ;
+                # sans agent, le commit raté est signalé, jamais tu.
+                g("config", "user.useConfigOnly", "true")
+                quatre, cinq = Path(tmp) / "p2c.md", Path(tmp) / "p2d.md"
+                quatre.write_text("## POINT DE REPRISE 02/01 13h00\n- prod = jkl012\n", encoding="utf-8")
+                cinq.write_text("## POINT DE REPRISE 02/01 14h00\n- prod = mno345\n", encoding="utf-8")
+                ancien_env = os.environ.copy()
+                for k in [k for k in os.environ if k.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_")) or k == "EMAIL"]:
+                    del os.environ[k]
+                os.environ.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+                erreurs = io.StringIO()
+                try:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        rc4 = point(racine, str(quatre), auteur="agt t/x", fichier_verrou=Path(tmp) / "v")
+                        tete4 = g("log", "-1", "--format=%an <%ae>").stdout.strip()
+                        with contextlib.redirect_stderr(erreurs):
+                            rc5 = point(racine, str(cinq), fichier_verrou=Path(tmp) / "v")
+                finally:
+                    os.environ.clear(), os.environ.update(ancien_env)
+                    g("config", "--unset", "user.useConfigOnly")
+                cas(tr("point : sans identité git, commit au nom de l'agent",
+                       "handover: no git identity, commit in the agent's name"),
+                    rc4 == 0 and tete4 == "agttx <agttx@localhost>")
+                cas(tr("point : commit raté signalé, jamais en silence",
+                       "handover: failed commit reported, never silently"),
+                    rc5 == 0 and "mno345" in (racine / POINT_NOTE).read_text() and POINT_NOTE in erreurs.getvalue()
+                    and g("log", "-1", "--format=%s").stdout.startswith("agt t/x"))
+                g("commit", "-qm", "fin de l'essai sans identité", "--", POINT_NOTE, POINT_ARCHIVE)
                 note_p = (racine / POINT_NOTE).read_text()
             else:
                 print(tr("(sauté : commit limité de mem point, git absent)",

@@ -217,7 +217,7 @@ Le cycle proposé, avec les fichiers du dossier `integration/` :
    décisions, prochaine étape, « À FAIRE EN PREMIER ») et le range avec `mem point` :
    l'ancien point part **mot pour mot** dans `archive/point-de-reprise.md`, un contrôle vérifie
    qu'aucune ligne n'a disparu (sinon rien n'est écrit), et le dossier mémoire est commité s'il est
-   un dépôt git.
+   un dépôt git (au nom de `--auteur` si git n'a pas d'identité ; un commit raté est signalé).
 3. **Taper /clear** (ou /compact).
 4. **Au redémarrage, le hook relance l'agent** : installer `integration/mem-reprise` dans le PATH
    (`install -m 755 integration/mem-reprise ~/.local/bin/`) et ajouter le contenu de
